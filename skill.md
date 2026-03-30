@@ -1,5 +1,5 @@
 ---
-name: spawned-deploy
+name: spawned
 description: Deploy and manage projects on spawned.ai. Use when the user wants to deploy, init, apply infrastructure, connect sources, view logs, redeploy, or manage spawned.ai projects.
 user_invocable: true
 ---
