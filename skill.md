@@ -14,7 +14,7 @@ Spawned is a declarative infrastructure platform. You define AWS infrastructure 
 
 ```bash
 spawned init --name <project> -y          # 1. create project
-# write infra.json                        # 2. define infrastructure (see templates below)
+# write infra.json with ALL components    # 2. define infrastructure (see templates below)
 spawned schema update <project> -f infra.json -y  # 3. upload schema
 spawned apply <project> --schema infra.json -y --detach  # 4. provision + build
 spawned get <project>                     # 5. monitor (pending → in_progress → deploying → running)
@@ -22,6 +22,8 @@ curl https://<project>.dev.askrike.app/   # 6. verify
 ```
 
 Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
+
+**IMPORTANT: Deploy everything at once.** Include ALL components (Container, DB, S3, Lambda, etc.) in the first `infra.json` and apply them together on a fresh project. Do NOT try to incrementally add components to a running deployment — `source` fields on Container and Lambda are silently dropped when updating an existing deployment's schema. If a deployment fails, delete it and start fresh rather than trying to fix it in place (`failed` is terminal).
 
 ---
 
@@ -109,11 +111,12 @@ Wire into container: add `"environment_secrets": { "DATABASE_URL": { "$ref": "<a
   "name": "<app>-storage",
   "values": {
     "id": "<app>-storage-s3-bucket", "name": "<app>-storage", "provider": "aws",
-    "bucket_name": "<globally-unique-name>",
+    "bucket_name": "<project>-storage-<random-8-chars>",
     "force_destroy": true, "versioning_enabled": false, "block_public_access": true
   }
 }
 ```
+Generate a unique `bucket_name` with: `python3 -c "import random,string; print('<project>-storage-'+''.join(random.choices(string.ascii_lowercase+string.digits,k=8)))"`. S3 names are globally unique. Old buckets persist after deployment deletion, so always use a fresh random suffix.
 
 ### Lambda (scheduled)
 
