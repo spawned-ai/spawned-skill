@@ -15,11 +15,12 @@ Spawned is a declarative infrastructure platform. You define AWS infrastructure 
 ```bash
 # 0. Ensure Dockerfile exists (create one if missing — see below)
 spawned init --name <project>          # 1. create project
-# write infra.json with ALL components    # 2. define infrastructure (see templates below)
-spawned schema update <project> -f infra.json  # 3. upload schema
-spawned apply <project> --schema infra.json  # 4. provision + build (streams terraform logs, takes 5-15 min)
-curl https://<project>.dev.askrike.app/   # 5. verify
+# write infra.json with ALL components # 2. define infrastructure (see templates below)
+spawned apply <project> --schema infra.json  # 3. upload schema + provision + build (5-15 min)
+curl https://<project>.dev.askrike.app/   # 4. verify
 ```
+
+Note: `apply --schema` uploads the schema AND triggers terraform in one step. This is more reliable than running `schema update` and `apply` separately (avoids a race condition where the first schema update after init is silently dropped).
 
 ### Step 0: Ensure Dockerfile exists
 
