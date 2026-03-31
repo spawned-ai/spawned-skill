@@ -13,10 +13,10 @@ Spawned is a declarative infrastructure platform. You define AWS infrastructure 
 ## Quick deploy (most common flow)
 
 ```bash
-spawned init --name <project> -y          # 1. create project
+spawned init --name <project>          # 1. create project
 # write infra.json with ALL components    # 2. define infrastructure (see templates below)
-spawned schema update <project> -f infra.json -y  # 3. upload schema
-spawned apply <project> --schema infra.json -y --detach  # 4. provision + build
+spawned schema update <project> -f infra.json  # 3. upload schema
+spawned apply <project> --schema infra.json --detach  # 4. provision + build
 spawned get <project>                     # 5. monitor (pending → in_progress → deploying → running)
 curl https://<project>.dev.askrike.app/   # 6. verify
 ```
@@ -171,23 +171,23 @@ After `spawned apply --detach`, use `spawned get <project>` to track status:
 
 ```bash
 # Project lifecycle
-spawned init --name <project> -y                  # create project
+spawned init --name <project>                  # create project
 spawned init --name <project> --aws-account <id>  # on your own AWS
 spawned list                                      # list all projects
 spawned get <project>                             # status + URL
-spawned delete <project> -y                       # delete
+spawned delete <project>                       # delete
 
 # Infrastructure
-spawned apply <project> --schema infra.json -y    # apply and stream logs
-spawned apply <project> --schema infra.json -y --detach  # apply in background
+spawned apply <project> --schema infra.json    # apply and stream logs
+spawned apply <project> --schema infra.json --detach  # apply in background
 spawned schema <project>                          # view current schema
-spawned schema update <project> -f infra.json -y  # update schema only (no terraform)
+spawned schema update <project> -f infra.json  # update schema only (no terraform)
 spawned export <project>                          # download terraform as zip
 
 # Code / CI-CD
 spawned connect <project> --container <c> --repo <url>  # connect git repo (may error — prefer source in infra.json)
 spawned sources <project>                         # list connected repos
-spawned redeploy <project> -y                     # rebuild from latest code
+spawned redeploy <project>                     # rebuild from latest code
 
 # Observability
 spawned logs <project>                            # stream deployment logs
