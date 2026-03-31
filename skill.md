@@ -28,6 +28,8 @@ Before deploying, check if a Dockerfile exists in the build path. If not, **crea
 
 Read the app's code to determine the language, framework, port, and entry point, then write an appropriate Dockerfile. For Next.js apps, also ensure `next.config` has `output: "standalone"`.
 
+Also check if the app uses **local file storage** (SQLite, file uploads, local caches). If so, add a FileSystem (EFS) component — ECS Fargate has ephemeral disk and data is lost on every task restart.
+
 Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
 
 `apply` streams terraform logs so you see errors. If it hangs with no output for >2 min, the PATCH is still processing — wait. If you used `--detach`, check logs with `spawned workflows <project> --logs`.
@@ -126,6 +128,26 @@ Wire into container: add `"environment_secrets": { "DATABASE_URL": { "$ref": "<a
 }
 ```
 Generate a unique `bucket_name` with: `python3 -c "import random,string; print('<project>-storage-'+''.join(random.choices(string.ascii_lowercase+string.digits,k=8)))"`. S3 names are globally unique. Old buckets persist after deployment deletion, so always use a fresh random suffix.
+
+### FileSystem (EFS — persistent storage)
+
+Use when the app needs persistent local storage (SQLite, file uploads, caches). ECS Fargate has ephemeral disk — data is lost on every task restart without EFS.
+
+```json
+{
+  "type": "FileSystem",
+  "name": "<app>-data",
+  "values": {
+    "id": "<app>-data-filesystem", "name": "<app>-data", "provider": "aws",
+    "network": { "$ref": "spawned-vpc" }, "public": false,
+    "encrypted": true, "performance_mode": "generalPurpose", "throughput_mode": "bursting",
+    "enable_backup": true, "access_point_path": "/<app>-data",
+    "posix_uid": 1000, "posix_gid": 1000
+  }
+}
+```
+
+Wire into container: add `{ "$ref": "<app>-data", "$connection": true }` to `connections` AND `{ "$ref": "<app>-data", "$mount": true, "$path": "/data" }` to `volumes`. Set `posix_uid`/`posix_gid` to match the container's user (0/0 for root, 1000/1000 for non-root).
 
 ### Lambda (scheduled)
 
