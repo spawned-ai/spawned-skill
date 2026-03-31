@@ -185,7 +185,7 @@ spawned schema update <project> -f infra.json -y  # update schema only (no terra
 spawned export <project>                          # download terraform as zip
 
 # Code / CI-CD
-spawned connect <project> --container <c> --repo <url>  # connect git repo (legacy, prefer source in infra.json)
+spawned connect <project> --container <c> --repo <url>  # connect git repo (may error — prefer source in infra.json)
 spawned sources <project>                         # list connected repos
 spawned redeploy <project> -y                     # rebuild from latest code
 
