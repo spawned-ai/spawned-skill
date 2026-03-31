@@ -16,12 +16,13 @@ Spawned is a declarative infrastructure platform. You define AWS infrastructure 
 spawned init --name <project>          # 1. create project
 # write infra.json with ALL components    # 2. define infrastructure (see templates below)
 spawned schema update <project> -f infra.json  # 3. upload schema
-spawned apply <project> --schema infra.json --detach  # 4. provision + build
-spawned get <project>                     # 5. monitor (pending → in_progress → deploying → running)
-curl https://<project>.dev.askrike.app/   # 6. verify
+spawned apply <project> --schema infra.json  # 4. provision + build (streams terraform logs)
+curl https://<project>.dev.askrike.app/   # 5. verify
 ```
 
 Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
+
+**Run `apply` WITHOUT `--detach`** so you see terraform logs and errors. If it hangs with no output for >2 minutes, the PATCH is still processing — wait, don't cancel. If terraform fails, the error will be in the streamed output.
 
 **IMPORTANT: Deploy everything at once.** Include ALL components (Container, DB, S3, Lambda, etc.) in the first `infra.json` and apply them together on a fresh project. Do NOT try to incrementally add components to a running deployment — `source` fields on Container and Lambda are silently dropped when updating an existing deployment's schema. If a deployment fails, delete it and start fresh rather than trying to fix it in place (`failed` is terminal).
 
@@ -155,7 +156,7 @@ Components with errors are silently dropped from the schema with no error messag
 
 ## Monitoring
 
-After `spawned apply --detach`, use `spawned get <project>` to track status:
+`spawned apply` streams terraform logs directly. If you used `--detach`, check with `spawned get <project>`:
 
 | Status | Meaning |
 |--------|---------|
@@ -178,8 +179,8 @@ spawned get <project>                             # status + URL
 spawned delete <project>                       # delete
 
 # Infrastructure
-spawned apply <project> --schema infra.json    # apply and stream logs
-spawned apply <project> --schema infra.json --detach  # apply in background
+spawned apply <project> --schema infra.json    # apply and stream terraform logs (preferred)
+spawned apply <project> --schema infra.json --detach  # background (no error output — avoid)
 spawned schema <project>                          # view current schema
 spawned schema update <project> -f infra.json  # update schema only (no terraform)
 spawned export <project>                          # download terraform as zip
