@@ -13,12 +13,96 @@ Spawned is a declarative infrastructure platform. You define AWS infrastructure 
 ## Quick deploy (most common flow)
 
 ```bash
+# 0. Ensure Dockerfile exists (create one if missing — see below)
 spawned init --name <project>          # 1. create project
 # write infra.json with ALL components    # 2. define infrastructure (see templates below)
 spawned schema update <project> -f infra.json  # 3. upload schema
 spawned apply <project> --schema infra.json  # 4. provision + build (streams terraform logs, takes 5-15 min)
 curl https://<project>.dev.askrike.app/   # 5. verify
 ```
+
+### Step 0: Ensure Dockerfile exists
+
+Before deploying, check if a Dockerfile exists in the build path. If not, **create one and push it to the repo**. Spawned builds containers from Dockerfiles — no Dockerfile means the build will fail.
+
+Read the app's code to determine: language, framework, port, entry point. Then create a Dockerfile:
+
+**Python (FastAPI/Flask):**
+```dockerfile
+FROM python:3.13-slim
+WORKDIR /app
+RUN pip install uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+COPY . .
+EXPOSE 8000
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**Node.js (Next.js with standalone):**
+```dockerfile
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine
+WORKDIR /app
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+**Node.js (Express/plain):**
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --production
+COPY . .
+EXPOSE 3000
+CMD ["node", "index.js"]
+```
+
+**Ruby on Rails:**
+```dockerfile
+FROM ruby:3.4-slim
+WORKDIR /app
+RUN apt-get update -qq && apt-get install -y build-essential libpq-dev
+COPY Gemfile Gemfile.lock ./
+RUN bundle install
+COPY . .
+RUN bundle exec rails assets:precompile
+EXPOSE 3000
+CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]
+```
+
+**Go:**
+```dockerfile
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o server .
+
+FROM alpine:3.19
+COPY --from=builder /app/server /server
+EXPOSE 8080
+CMD ["/server"]
+```
+
+After creating the Dockerfile, commit and push it to the repo's main branch before deploying.
+
+For Next.js apps, also ensure `next.config` has `output: "standalone"`.
 
 Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
 
