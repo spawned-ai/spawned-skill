@@ -16,13 +16,13 @@ Spawned is a declarative infrastructure platform. You define AWS infrastructure 
 spawned init --name <project>          # 1. create project
 # write infra.json with ALL components    # 2. define infrastructure (see templates below)
 spawned schema update <project> -f infra.json  # 3. upload schema
-spawned apply <project> --schema infra.json  # 4. provision + build (streams terraform logs)
+spawned apply <project> --schema infra.json  # 4. provision + build (streams terraform logs, takes 5-15 min)
 curl https://<project>.dev.askrike.app/   # 5. verify
 ```
 
 Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
 
-**Run `apply` WITHOUT `--detach`** so you see terraform logs and errors. If it hangs with no output for >2 minutes, the PATCH is still processing — wait, don't cancel. If terraform fails, the error will be in the streamed output.
+`apply` streams terraform logs so you see errors. If it hangs with no output for >2 min, the PATCH is still processing — wait. If you used `--detach`, check logs with `spawned workflows <project> --logs`.
 
 **IMPORTANT: Deploy everything at once.** Include ALL components (Container, DB, S3, Lambda, etc.) in the first `infra.json` and apply them together on a fresh project. Do NOT try to incrementally add components to a running deployment — `source` fields on Container and Lambda are silently dropped when updating an existing deployment's schema. If a deployment fails, delete it and start fresh rather than trying to fix it in place (`failed` is terminal).
 
