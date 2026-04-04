@@ -1,5 +1,5 @@
 ---
-name: spawned-deploy
+name: spawned
 description: Deploy and manage projects on spawned.ai. Use when the user wants to deploy, init, apply infrastructure, connect sources, view logs, redeploy, or manage spawned.ai projects.
 user_invocable: true
 ---
@@ -13,15 +13,28 @@ Spawned is a declarative infrastructure platform. You define AWS infrastructure 
 ## Quick deploy (most common flow)
 
 ```bash
-spawned init --name <project> -y          # 1. create project
-# write infra.json                        # 2. define infrastructure (see templates below)
-spawned schema update <project> -f infra.json -y  # 3. upload schema
-spawned apply <project> --schema infra.json -y --detach  # 4. provision + build
-spawned get <project>                     # 5. monitor (pending → in_progress → deploying → running)
-curl https://<project>.dev.askrike.app/   # 6. verify
+# 0. Ensure Dockerfile exists (create one if missing — see below)
+spawned init --name <project>          # 1. create project
+# write infra.json with ALL components # 2. define infrastructure (see templates below)
+spawned apply <project> --schema infra.json  # 3. upload schema + provision + build (5-15 min)
+curl https://<project>.dev.askrike.app/   # 4. verify
 ```
 
+Note: `apply --schema` uploads the schema AND triggers terraform in one step. This is more reliable than running `schema update` and `apply` separately (avoids a race condition where the first schema update after init is silently dropped).
+
+### Step 0: Ensure Dockerfile exists
+
+Before deploying, check if a Dockerfile exists in the build path. If not, **create one and push it to the repo's main branch**. Spawned builds containers from Dockerfiles — no Dockerfile means the build will fail.
+
+Read the app's code to determine the language, framework, port, and entry point, then write an appropriate Dockerfile. For Next.js apps, also ensure `next.config` has `output: "standalone"`.
+
+Also check if the app uses **local file storage** (SQLite, file uploads, local caches). If so, add a FileSystem (EFS) component — ECS Fargate has ephemeral disk and data is lost on every task restart.
+
 Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
+
+`apply` streams terraform logs so you see errors. If it hangs with no output for >2 min, the PATCH is still processing — wait. If you used `--detach`, check logs with `spawned workflows <project> --logs`.
+
+**IMPORTANT: Deploy everything at once.** Include ALL components (Container, DB, S3, Lambda, etc.) in the first `infra.json` and apply them together on a fresh project. Do NOT try to incrementally add components to a running deployment — `source` fields on Container and Lambda are silently dropped when updating an existing deployment's schema. If a deployment fails, delete it and start fresh rather than trying to fix it in place (`failed` is terminal).
 
 ---
 
@@ -133,11 +146,32 @@ Wire into container: add `"environment_secrets": { "DATABASE_URL": { "$ref": "<a
   "name": "<app>-storage",
   "values": {
     "id": "<app>-storage-s3-bucket", "name": "<app>-storage", "provider": "aws",
-    "bucket_name": "<globally-unique-name>",
+    "bucket_name": "<project>-storage-<random-8-chars>",
     "force_destroy": true, "versioning_enabled": false, "block_public_access": true
   }
 }
 ```
+Generate a unique `bucket_name` with: `python3 -c "import random,string; print('<project>-storage-'+''.join(random.choices(string.ascii_lowercase+string.digits,k=8)))"`. S3 names are globally unique. Old buckets persist after deployment deletion, so always use a fresh random suffix.
+
+### FileSystem (EFS — persistent storage)
+
+Use when the app needs persistent local storage (SQLite, file uploads, caches). ECS Fargate has ephemeral disk — data is lost on every task restart without EFS.
+
+```json
+{
+  "type": "FileSystem",
+  "name": "<app>-data",
+  "values": {
+    "id": "<app>-data-filesystem", "name": "<app>-data", "provider": "aws",
+    "network": { "$ref": "spawned-vpc" }, "public": false,
+    "encrypted": true, "performance_mode": "generalPurpose", "throughput_mode": "bursting",
+    "enable_backup": true, "access_point_path": "/<app>-data",
+    "posix_uid": 1000, "posix_gid": 1000
+  }
+}
+```
+
+Wire into container: add `{ "$ref": "<app>-data", "$connection": true }` to `connections` AND `{ "$ref": "<app>-data", "$mount": true, "$path": "/data" }` to `volumes`. Set `posix_uid`/`posix_gid` to match the container's user (0/0 for root, 1000/1000 for non-root).
 
 S3 with static site content (source + build):
 
@@ -224,7 +258,7 @@ Components with errors are silently dropped from the schema with no error messag
 
 ## Monitoring
 
-After `spawned apply --detach`, use `spawned get <project>` to track status:
+`spawned apply` streams terraform logs directly. If you used `--detach`, check with `spawned get <project>`:
 
 | Status | Meaning |
 |--------|---------|
@@ -240,23 +274,23 @@ After `spawned apply --detach`, use `spawned get <project>` to track status:
 
 ```bash
 # Project lifecycle
-spawned init --name <project> -y                  # create project
+spawned init --name <project>                  # create project
 spawned init --name <project> --aws-account <id>  # on your own AWS
 spawned list                                      # list all projects
 spawned get <project>                             # status + URL
-spawned delete <project> -y                       # delete
+spawned delete <project>                       # delete
 
 # Infrastructure
-spawned apply <project> --schema infra.json -y    # apply and stream logs
-spawned apply <project> --schema infra.json -y --detach  # apply in background
+spawned apply <project> --schema infra.json    # apply and stream terraform logs (preferred)
+spawned apply <project> --schema infra.json --detach  # background (no error output — avoid)
 spawned schema <project>                          # view current schema
-spawned schema update <project> -f infra.json -y  # update schema only (no terraform)
+spawned schema update <project> -f infra.json  # update schema only (no terraform)
 spawned export <project>                          # download terraform as zip
 
 # Code / CI-CD
-spawned connect <project> --container <c> --repo <url>  # connect git repo (legacy, prefer source in infra.json)
+spawned connect <project> --container <c> --repo <url>  # connect git repo (may error — prefer source in infra.json)
 spawned sources <project>                         # list connected repos
-spawned redeploy <project> -y                     # rebuild from latest code
+spawned redeploy <project>                     # rebuild from latest code
 
 # Observability
 spawned logs <project>                            # stream deployment logs
