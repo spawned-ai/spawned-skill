@@ -45,6 +45,10 @@ Every project gets shared `spawned-vpc` and `spawned-lb` as data sources. DO NOT
 
 Add after the LoadBalancer component. Read the Dockerfile `EXPOSE` line to determine the port.
 
+`source` declares where code comes from. `build` declares how to prepare it:
+- `source.build_path`: Docker build context directory (what `docker build` can `COPY` from). Defaults to `"."`.
+- `build.dockerfile`: path to the Dockerfile when it is not at the root of `build_path` (e.g. `"docker/Dockerfile.prod"`). Optional — omit to auto-discover.
+
 ```json
 {
   "type": "Container",
@@ -53,6 +57,26 @@ Add after the LoadBalancer component. Read the Dockerfile `EXPOSE` line to deter
     "id": "<app>-container", "name": "<app>", "provider": "aws",
     "image": null,
     "source": { "type": "git", "url": "https://github.com/<org>/<repo>", "build_path": "." },
+    "build": { "dockerfile": "<optional: path/to/Dockerfile>" },
+    "network": { "$ref": "spawned-vpc" },
+    "public": false, "cpu": "512", "memory": "1024",
+    "ports": [3000],
+    "load_balancer": { "$ref": "spawned-lb" },
+    "domain": "<project>.dev.askrike.app",
+    "health_check": { "path": "/", "interval": 30, "timeout": 10 }
+  }
+}
+```
+
+For a pre-built external image (no source/build needed):
+
+```json
+{
+  "type": "Container",
+  "name": "<app>",
+  "values": {
+    "id": "<app>-container", "name": "<app>", "provider": "aws",
+    "image": "ghcr.io/<org>/<repo>:latest",
     "network": { "$ref": "spawned-vpc" },
     "public": false, "cpu": "512", "memory": "1024",
     "ports": [3000],
@@ -115,7 +139,26 @@ Wire into container: add `"environment_secrets": { "DATABASE_URL": { "$ref": "<a
 }
 ```
 
+S3 with static site content (source + build):
+
+```json
+{
+  "type": "S3Bucket",
+  "name": "<app>-site",
+  "values": {
+    "id": "<app>-site-s3-bucket", "name": "<app>-site", "provider": "aws",
+    "source": { "type": "git", "url": "https://github.com/<org>/<repo>", "build_path": "." },
+    "build": { "commands": ["npm ci", "npm run build"], "output": "dist" },
+    "website_config": { "index_document": "index.html", "error_document": "index.html" },
+    "block_public_access": false,
+    "force_destroy": true
+  }
+}
+```
+
 ### Lambda (scheduled)
+
+`source` declares where code comes from. `build` is optional — use it for pip requirements or custom build commands.
 
 ```json
 {
@@ -123,12 +166,27 @@ Wire into container: add `"environment_secrets": { "DATABASE_URL": { "$ref": "<a
   "name": "<app>-worker",
   "values": {
     "id": "<app>-worker-lambda", "name": "<app>-worker", "provider": "aws",
-    "code_path": "src/<repo-name>/<build_path>",
-    "source": { "type": "git", "url": "https://github.com/<org>/<repo>", "build_path": "<path>" },
+    "source": { "type": "git", "url": "https://github.com/<org>/<repo>", "build_path": "." },
     "runtime": "nodejs20.x", "handler": "src/index.handler",
     "timeout": 300, "memory": 512,
     "schedule": "rate(2 hours)",
     "network": { "$ref": "spawned-vpc" }, "public": false
+  }
+}
+```
+
+Lambda with pip requirements:
+
+```json
+{
+  "type": "Lambda",
+  "name": "<app>-worker",
+  "values": {
+    "id": "<app>-worker-lambda", "name": "<app>-worker", "provider": "aws",
+    "source": { "type": "upload", "id": "<upload-id>", "path": "src/<app>" },
+    "build": { "requirements": "requirements.txt" },
+    "runtime": "python3.12", "handler": "lambda_function.lambda_handler",
+    "timeout": 60, "memory": 256
   }
 }
 ```
@@ -139,14 +197,28 @@ Wire into container: add `"environment_secrets": { "DATABASE_URL": { "$ref": "<a
 
 | Field | Component | Rule |
 |-------|-----------|------|
-| `domain` | Container with LB | **REQUIRED**. `<project>.dev.askrike.app`. Without it, URL returns 503 forever. |
-| `image` | Container with source | Set to `null` explicitly. |
+| `domain` | Container with LB | **REQUIRED** when `load_balancer` is set. `<project>.dev.askrike.app`. Without it, no listener rule is created and deployment fails. |
+| `image` | Container with source | Set to `null` explicitly when using `source`/`build`. |
 | `ports` | Container | Must match Dockerfile `EXPOSE` line. |
-| `code_path` | Lambda with source | **REQUIRED** even with source. Set to `src/<repo>/<build_path>`. |
+| `source` | Lambda | **REQUIRED**. Must have `"type"` (`"git"` or `"upload"`) and type-specific fields. |
+| `source.path` | Lambda with upload source | **REQUIRED**. Path where uploaded code lives (e.g. `"src/my-app"`). |
+| `build.dockerfile` | Container/Lambda | Only set when code needs a Docker build. Omit to auto-discover for containers. |
 | `bucket_name` | S3Bucket | Must be globally unique across all AWS accounts. |
 | `version` | Database (postgres) | Use `"16"`. Other versions may be silently rejected. |
 
 Components with errors are silently dropped from the schema with no error message.
+
+### Source and build pattern
+
+`source` and `build` are separate concerns used across Lambda, Container, and S3Bucket:
+
+- **`source`**: Where code comes from. Two types:
+  - `{"type": "git", "url": "...", "build_path": "."}` — pulled from git repo
+  - `{"type": "upload", "id": "...", "path": "src/..."}` — uploaded by user
+- **`build`**: How to prepare the code (optional, omit if code is ready as-is):
+  - `{"requirements": "requirements.txt"}` — install pip dependencies (Lambda)
+  - `{"commands": ["npm ci", "npm run build"], "output": "dist"}` — run build commands (S3)
+  - `{"dockerfile": "Dockerfile.prod"}` — specify Dockerfile (Container/Lambda)
 
 ---
 
