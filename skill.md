@@ -10,7 +10,7 @@ $ARGUMENTS
 
 Spawned is a declarative infrastructure platform. You define AWS infrastructure in `infra.json`, then apply it. The platform converts JSON into Terraform and provisions it.
 
-For the full infrastructure JSON spec with all component types and fields, run `spawned llm-help`.
+For the full infrastructure JSON spec with all component types and fields, run `spawned spec`.
 
 ## Quick deploy (most common flow)
 
@@ -22,7 +22,7 @@ spawned apply <project> --schema infra.json  # 3. upload schema + provision + bu
 curl https://<project>.dev.askrike.app/   # 4. verify
 ```
 
-Note: `apply --schema` uploads the schema AND triggers terraform in one step. You can also validate before applying: `spawned validate <project> --schema infra.json`.
+Note: `apply --schema` uploads the schema AND triggers terraform in one step. You can also validate before applying: `spawned validate --schema infra.json`.
 
 ### Step 0: Ensure Dockerfile exists
 
@@ -66,7 +66,7 @@ Components MUST be ordered so a component appears before any component that refe
 
 Every project on spawned.ai's managed account gets shared `spawned-vpc` and `spawned-lb` as data sources. DO NOT create your own Network or LoadBalancer.
 
-The shared infra is displayed when you run `spawned init`. Include it in your infra.json.
+The shared infra is displayed when you run `spawned init`. You can also view it with `spawned list --shared`. Include it in your infra.json.
 
 ### Boilerplate (always include for spawned.ai managed account)
 
@@ -361,19 +361,20 @@ Components with errors may be silently dropped from the schema. Use `spawned val
 
 ```bash
 # Project lifecycle
-spawned init --name <project>                     # create project (alias: deploy)
+spawned init --name <project>                     # create project
 spawned init --name <project> --aws-account <id>  # on your own AWS
 spawned list                                      # list all projects
+spawned list --shared                             # list shared infrastructure components
 spawned get <project>                             # status + URL
+spawned get <project> --schema                    # view current infra.json
 spawned delete <project>                          # delete (may redirect to web dashboard)
 
 # Infrastructure
 spawned apply <project> --schema infra.json       # apply and stream terraform logs (preferred)
 spawned apply <project> --schema infra.json --detach  # background
-spawned validate <project> --schema infra.json    # validate without applying
-spawned schema <project>                          # view current schema
-spawned schema update <project> -f infra.json     # update schema only (no terraform)
-spawned export <project>                          # download terraform files (alias: files)
+spawned validate --schema infra.json              # validate without a project
+spawned validate <project> --schema infra.json    # validate in context of a project
+spawned export <project>                          # download generated project files
 
 # Code / CI-CD
 spawned connect <project> --container <c> --repo <url>  # connect git repo (legacy — prefer source in infra.json)
@@ -381,7 +382,7 @@ spawned sources <project>                         # list connected repos (git + 
 spawned source update <project> <container> --build-path <path>  # change build path + rebuild
 spawned source connect-files <project> --container <c> --file <path>  # upload file as build source
 spawned source rebuild-files <project> <container> --file <path>      # re-upload and rebuild
-spawned redeploy <project>                        # rebuild from latest code (alias: cicd)
+spawned redeploy <project>                        # rebuild from latest code
 
 # Observability
 spawned logs <project> <component> --tail 200     # fetch component logs
@@ -394,7 +395,7 @@ spawned builds <project> --all                    # all builds including complet
 spawned upload <project> --bucket <name> --key <s3-key> --file <local-path>  # upload to S3
 
 # Reference
-spawned llm-help                                  # full infrastructure JSON spec (alias: llm-spec, infra-spec)
+spawned spec                                      # full infrastructure schema reference
 
 # Auth
 spawned login                                     # authenticate (alias: signin)
