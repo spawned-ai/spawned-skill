@@ -10,33 +10,40 @@ $ARGUMENTS
 
 Spawned is a declarative infrastructure platform. You define AWS infrastructure in `infra.json`, then apply it. The platform converts JSON into Terraform and provisions it.
 
-For the full infrastructure JSON spec with all component types and fields, run `spawned spec`.
+## Discovery commands
+
+Use these to understand the current state before making changes:
+
+- `spawned spec` — full infrastructure JSON spec with all component types, fields, and validation rules. Use this as the authoritative reference for component fields.
+- `spawned list --shared` — what shared infrastructure is available to reference
+- `spawned get <project> --schema` — the current infra.json for an existing project
+- `spawned get <project>` — project status and URL
+- `spawned validate --schema infra.json` — check for errors before applying
 
 ## Quick deploy (most common flow)
 
 ```bash
-# 0. Ensure Dockerfile exists (create one if missing — see below)
 spawned init --name <project>          # 1. create project (shows shared resources)
-# write infra.json with ALL components # 2. define infrastructure (see templates below)
-spawned apply <project> --schema infra.json  # 3. upload schema + provision + build (5-15 min)
+# write infra.json                     # 2. define infrastructure (see below)
+spawned apply <project> --schema infra.json  # 3. upload schema + provision + build
 curl https://<project>.dev.askrike.app/   # 4. verify
 ```
 
-Note: `apply --schema` uploads the schema AND triggers terraform in one step. You can also validate before applying: `spawned validate --schema infra.json`.
+`apply --schema` uploads the schema and triggers terraform in one step. You can validate before applying with `spawned validate --schema infra.json`.
 
-### Step 0: Ensure Dockerfile exists
+### Dockerfiles
 
-Before deploying, check if a Dockerfile exists in the build path. If not, **create one and push it to the repo's main branch**. Spawned builds containers from Dockerfiles — no Dockerfile means the build will fail.
+Spawned builds containers from Dockerfiles. If the repo doesn't have one, create an appropriate Dockerfile and push it to the repo's main branch before deploying. Read the app's code to determine the language, framework, port, and entry point. For Next.js apps, also ensure `next.config` has `output: "standalone"`.
 
-Read the app's code to determine the language, framework, port, and entry point, then write an appropriate Dockerfile. For Next.js apps, also ensure `next.config` has `output: "standalone"`.
+### Persistent storage
 
-Also check if the app uses **local file storage** (SQLite, file uploads, local caches). If so, add a FileSystem (EFS) component — ECS Fargate has ephemeral disk and data is lost on every task restart.
+ECS Fargate has ephemeral disk — data is lost on every task restart. If the app uses local file storage (SQLite, file uploads, local caches), add a FileSystem (EFS) component.
 
-Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
+### Timing and monitoring
 
-`apply` streams terraform logs so you see errors. If it hangs with no output for >2 min, the PATCH is still processing — wait. If you used `--detach`, check progress with `spawned builds <project>`.
+Provisioning takes ~5 min without a database, ~10-15 min with one (RDS is slow). `apply` streams terraform logs so you can see errors in real time. If it hangs with no output for >2 min, the PATCH is still processing — wait. If you used `--detach`, check progress with `spawned builds <project>`.
 
-**IMPORTANT: Deploy everything at once.** Include ALL components (Container, DB, S3, Lambda, etc.) in the first `infra.json` and apply them together on a fresh project. Do NOT try to incrementally add components to a running deployment — `source` fields on Container and Lambda are silently dropped when updating an existing deployment's schema. If a deployment fails, delete it and start fresh rather than trying to fix it in place (`failed` is terminal).
+Spawned is a declarative platform — you can include all components (Container, DB, S3, Lambda, etc.) in a single `infra.json` and apply them together.
 
 ---
 
@@ -51,7 +58,7 @@ Timing: ~5 min without DB, ~10-15 min with DB (RDS is slow).
 }
 ```
 
-Components MUST be ordered so a component appears before any component that references it. Every component's `values` must include `id` (pattern: `"{name}-{suffix}"`), `name` (matching the top-level name), and `provider` (`"aws"`).
+Components should be ordered so that a component appears before any component that references it. Every component's `values` includes `id` (pattern: `"{name}-{suffix}"`), `name` (matching the top-level name), and `provider` (`"aws"`).
 
 ### Reference system
 
@@ -62,13 +69,46 @@ Components MUST be ordered so a component appears before any component that refe
 
 ---
 
-## infra.json templates
+## Shared infrastructure and imports
 
-Every project on spawned.ai's managed account gets shared `spawned-vpc` and `spawned-lb` as data sources. DO NOT create your own Network or LoadBalancer.
+Projects on spawned.ai's managed account have shared infrastructure already provisioned (typically a Network and LoadBalancer, but possibly also Databases, S3 Buckets, FileSystems, etc.). These are available for your components to reference — you don't need to create your own.
 
-The shared infra is displayed when you run `spawned init`. You can also view it with `spawned list --shared`. Include it in your infra.json.
+Run `spawned init` to see a summary or `spawned list --shared` to get the full component JSON.
 
-### Boilerplate (always include for spawned.ai managed account)
+### Using imports (preferred)
+
+If a shared project exists, add `"imports"` to your infra.json. The backend resolves imports automatically — all components from the imported project become available for `$ref` by name. You don't need to redefine them in your `components` array.
+
+```json
+{
+  "version": "1.0",
+  "imports": [{ "project": "shared-project-name" }],
+  "components": [
+    {
+      "type": "Container",
+      "name": "my-app",
+      "values": {
+        "id": "my-app-container", "name": "my-app", "provider": "aws",
+        "source": { "type": "git", "url": "https://github.com/org/repo", "build_path": "." },
+        "network": { "$ref": "shared-vpc" },
+        "load_balancer": { "$ref": "shared-lb" },
+        "domain": "my-project.dev.askrike.app",
+        "cpu": "512", "memory": "1024", "ports": [3000],
+        "public": false,
+        "health_check": { "path": "/", "interval": 30, "timeout": 10 }
+      }
+    }
+  ]
+}
+```
+
+No Network or LoadBalancer in `components` — they come from the import. Any component from the shared project (databases, buckets, filesystems, etc.) can be referenced the same way.
+
+### Inline data sources (when not using imports)
+
+If there is no shared project to import from, include the shared components inline with `is_data_source: true`. Run `spawned list --shared` to get the exact JSON, then place those components at the start of your `components` array.
+
+Example for the default spawned.ai managed account:
 
 ```json
 {
@@ -80,15 +120,24 @@ The shared infra is displayed when you run `spawned init`. You can also view it 
 }
 ```
 
-### Container with git source (most common)
+---
 
-Add after the LoadBalancer component. Read the Dockerfile `EXPOSE` line to determine the port.
+## Component reference
 
-`source` declares where code comes from:
-- `source.build_path`: Docker build context directory (what `docker build` can `COPY` from). Defaults to `"."`.
-- `source.dockerfile_path`: path to the Dockerfile relative to repo root when it's not auto-discoverable (e.g. `"docker/Dockerfile.prod"`). Optional — omit to auto-discover.
+The examples below cover the most common patterns. For the full list of fields, valid values, and validation rules for any component type, run `spawned spec`.
 
-When `source` is set, the repo is pulled as a git subtree, `image` is automatically set to `null`, and a CI/CD workflow is generated.
+### Container
+
+Every Container requires a `source` field. Source types:
+- `{"type": "git", "url": "https://github.com/org/repo"}` — git repo (most common). Generates a CI/CD workflow.
+- `{"type": "image", "uri": "nginx:latest"}` — pre-built external image.
+- `{"type": "upload", "path": "src/app"}` — uploaded code.
+
+Source optional fields:
+- `build_path`: Docker build context directory. Defaults to `"."`.
+- `dockerfile_path`: path to the Dockerfile relative to repo root when it's not in the default location (e.g. `"docker/Dockerfile.prod"`).
+
+Container with git source:
 
 ```json
 {
@@ -107,7 +156,7 @@ When `source` is set, the repo is pulled as a git subtree, `image` is automatica
 }
 ```
 
-For a pre-built external image (no source needed):
+Container with pre-built image:
 
 ```json
 {
@@ -115,7 +164,7 @@ For a pre-built external image (no source needed):
   "name": "<app>",
   "values": {
     "id": "<app>-container", "name": "<app>", "provider": "aws",
-    "image": "ghcr.io/<org>/<repo>:latest",
+    "source": { "type": "image", "uri": "ghcr.io/<org>/<repo>:latest" },
     "network": { "$ref": "spawned-vpc" },
     "public": false, "cpu": "512", "memory": "1024",
     "ports": [3000],
@@ -126,18 +175,19 @@ For a pre-built external image (no source needed):
 }
 ```
 
-Container optional fields:
+The `ports` value should match the Dockerfile `EXPOSE` line. When using a load balancer, `domain` is needed for listener rule creation (format: `<project>.dev.askrike.app`).
+
+Optional fields:
 - `environment`: `{ "KEY": "value", "DB_HOST": { "$ref": "my-db", "$get": "endpoint" } }`
 - `environment_secrets`: `{ "DATABASE_URL": { "$ref": "my-secret" } }`
 - `connections`: `[{ "$ref": "my-db", "$connection": true }]` — IAM/network access to other components
 - `volumes`: `[{ "$ref": "my-fs", "$mount": true, "$path": "/data" }]` — EFS mounts
 - `auto_scaling`: `{ "min": 2, "max": 10, "cpu_percent": 70 }`
 - `path`: URL path pattern for ALB routing (e.g. `"/api/*"`)
-- `image_tag`: tag to deploy when `image` is `null` (default: `"latest"`)
 
 CPU/Memory valid Fargate combinations: 256/512-2048, 512/1024-4096, 1024/2048-8192, 2048/4096-16384, 4096/8192-30720.
 
-### Database (PostgreSQL)
+### Database
 
 ```json
 {
@@ -192,7 +242,7 @@ Wire into container: add `"environment_secrets": { "DATABASE_URL": { "$ref": "<a
 }
 ```
 
-`bucket_name` is auto-generated if omitted. If you set it manually, it must be globally unique — generate with: `python3 -c "import random,string; print('<project>-storage-'+''.join(random.choices(string.ascii_lowercase+string.digits,k=8)))"`.
+`bucket_name` is auto-generated if omitted. If set manually, it must be globally unique.
 
 Wire into container: add `{ "$ref": "<app>-storage", "$connection": true }` to `connections` and use `{ "$ref": "<app>-storage", "$get": "bucket_name" }` in `environment`.
 
@@ -202,7 +252,7 @@ Available `$get` outputs: `bucket_name`, `bucket_arn`, `bucket_domain_name`, `bu
 
 ### FileSystem (EFS — persistent storage)
 
-Use when the app needs persistent local storage (SQLite, file uploads, caches). ECS Fargate has ephemeral disk — data is lost on every task restart without EFS.
+For apps that need persistent local storage (SQLite, file uploads, caches).
 
 ```json
 {
@@ -218,9 +268,13 @@ Use when the app needs persistent local storage (SQLite, file uploads, caches). 
 }
 ```
 
-Wire into container: add BOTH `{ "$ref": "<app>-data", "$connection": true }` to `connections` AND `{ "$ref": "<app>-data", "$mount": true, "$path": "/data" }` to `volumes`. Set `posix_uid`/`posix_gid` to match the container's user (0/0 for root, 1000/1000 for non-root).
+Wire into container: add both `{ "$ref": "<app>-data", "$connection": true }` to `connections` and `{ "$ref": "<app>-data", "$mount": true, "$path": "/data" }` to `volumes`. Set `posix_uid`/`posix_gid` to match the container's user (0/0 for root, 1000/1000 for non-root).
 
 ### Lambda
+
+Every Lambda requires a `source` field. Source types:
+- `{"type": "git", "url": "https://github.com/org/repo"}` — git repo.
+- `{"type": "upload", "path": "./lambda_code"}` — uploaded code.
 
 ```json
 {
@@ -236,7 +290,7 @@ Wire into container: add BOTH `{ "$ref": "<app>-data", "$connection": true }` to
 }
 ```
 
-Lambda with `code_path` instead of git source:
+Lambda with uploaded code:
 
 ```json
 {
@@ -244,7 +298,7 @@ Lambda with `code_path` instead of git source:
   "name": "<app>-worker",
   "values": {
     "id": "<app>-worker-lambda", "name": "<app>-worker", "provider": "aws",
-    "code_path": "./lambda_code",
+    "source": { "type": "upload", "path": "./lambda_code" },
     "runtime": "python3.12", "handler": "handler.main",
     "timeout": 300, "memory": 512,
     "schedule": "rate(1 hour)",
@@ -253,13 +307,13 @@ Lambda with `code_path` instead of git source:
 }
 ```
 
-Optional fields: `environment`, `environment_secrets`, `connections`, `network` (required for VPC/EFS access), `public`, `file_system` (EFS mount — path MUST start with `/mnt/`).
+Optional fields: `environment`, `environment_secrets`, `connections`, `network` (needed for VPC/EFS access), `public`, `file_system` (EFS mount — path should start with `/mnt/`).
 
 Schedule formats: `rate(5 minutes)`, `rate(1 hour)`, `rate(1 day)`, `cron(0 9 * * ? *)`. Runtimes: `python3.12`, `python3.11`, `nodejs20.x`, `nodejs18.x`, `java21`, `java17`, `dotnet8`, `ruby3.3`.
 
 ### CloudFront Distribution (CDN)
 
-Use with S3 for static site hosting, or with a custom origin domain.
+For S3 static site hosting or custom origin domains.
 
 ```json
 {
@@ -280,9 +334,9 @@ When pairing with S3, set `"bucket_policy_managed_externally": true` on the S3Bu
 
 Security defaults: HTTPS required, Origin Access Control, gzip, TLS 1.2+, HTTP/2+3, 24h cache TTL.
 
-### NetworkLoadBalancer (TCP/UDP — game servers, non-HTTP)
+### NetworkLoadBalancer (TCP/UDP)
 
-Use instead of the shared ALB when you need TCP/UDP passthrough (e.g. game servers).
+For TCP/UDP passthrough instead of the shared ALB (e.g. game servers).
 
 ```json
 {
@@ -328,18 +382,19 @@ Alternatively use `fargate_profiles` for serverless compute: `{ "default": { "se
 
 ---
 
-## Required fields that cause silent failures if wrong
+## Common pitfalls
 
-| Field | Component | Rule |
+| Field | Component | Note |
 |-------|-----------|------|
-| `domain` | Container with LB | **REQUIRED** when `load_balancer` is set. `<project>.dev.askrike.app`. Without it, no listener rule is created and deployment fails. |
-| `ports` | Container | Must match Dockerfile `EXPOSE` line. Must have at least one entry. |
-| `source` or `code_path` | Lambda | One is **REQUIRED**. `source` with `"type": "git"` or `"upload"`, or `code_path` with a local path. |
-| `network` | Lambda with EFS | **REQUIRED** when `file_system` is set (EFS requires VPC). |
-| `acm_certificate_arn` | CloudFront with aliases | **REQUIRED** when `aliases` is set. Must be in `us-east-1`. |
+| `domain` | Container with LB | Needed when `load_balancer` is set (`<project>.dev.askrike.app`). Without it, no listener rule is created. |
+| `ports` | Container | Should match the Dockerfile `EXPOSE` line. |
+| `source` | Container | Required. Use `"type": "git"`, `"type": "image"`, or `"type": "upload"`. |
+| `source` | Lambda | Required. Use `"type": "git"` or `"type": "upload"`. |
+| `network` | Lambda with EFS | Needed when `file_system` is set (EFS requires VPC access). |
+| `acm_certificate_arn` | CloudFront with aliases | Needed when `aliases` is set. Must be in `us-east-1`. |
 | `bucket_policy_managed_externally` | S3 + CloudFront | Set to `true` on the S3Bucket so CloudFront can inject its OAC policy. |
 
-Components with errors may be silently dropped from the schema. Use `spawned validate` to catch errors before applying.
+You can use `spawned validate --schema infra.json` to catch issues before applying.
 
 ---
 
@@ -353,31 +408,30 @@ Components with errors may be silently dropped from the schema. Use `spawned val
 | `in_progress` | Terraform provisioning (~5-10 min) |
 | `deploying` | Terraform done, building Docker image |
 | `running` | Live and healthy (may take ~60s after this for URL to respond) |
-| `failed` | Terminal — must delete and start over |
+| `failed` | Check logs for errors and fix the issue |
 
 ---
 
 ## All commands
 
 ```bash
-# Project lifecycle
-spawned init --name <project>                     # create project
-spawned init --name <project> --aws-account <id>  # on your own AWS
+# Discovery — use these to understand current state
+spawned spec                                      # full infrastructure schema reference
 spawned list                                      # list all projects
 spawned list --shared                             # list shared infrastructure components
 spawned get <project>                             # status + URL
 spawned get <project> --schema                    # view current infra.json
-spawned delete <project>                          # delete (may redirect to web dashboard)
-
-# Infrastructure
-spawned apply <project> --schema infra.json       # apply and stream terraform logs (preferred)
-spawned apply <project> --schema infra.json --detach  # background
-spawned validate --schema infra.json              # validate without a project
+spawned validate --schema infra.json              # validate schema before applying
 spawned validate <project> --schema infra.json    # validate in context of a project
+
+# Project lifecycle
+spawned init --name <project>                     # create project
+spawned init --name <project> --aws-account <id>  # on your own AWS
+spawned apply <project> --schema infra.json       # apply and stream terraform logs
+spawned apply <project> --schema infra.json --detach  # apply in background
 spawned export <project>                          # download generated project files
 
 # Code / CI-CD
-spawned connect <project> --container <c> --repo <url>  # connect git repo (legacy — prefer source in infra.json)
 spawned sources <project>                         # list connected repos (git + file sources)
 spawned source update <project> <container> --build-path <path>  # change build path + rebuild
 spawned source connect-files <project> --container <c> --file <path>  # upload file as build source
@@ -394,9 +448,6 @@ spawned builds <project> --all                    # all builds including complet
 # Files
 spawned upload <project> --bucket <name> --key <s3-key> --file <local-path>  # upload to S3
 
-# Reference
-spawned spec                                      # full infrastructure schema reference
-
 # Auth
 spawned login                                     # authenticate (alias: signin)
 spawned logout                                    # clear tokens (alias: signout)
@@ -412,6 +463,5 @@ spawned accounts connect --name "My AWS"             # get CloudFormation URL + 
 spawned accounts configure <id> --role-arn <arn>      # complete setup
 spawned accounts list                                 # verify status=active
 spawned accounts domain set <id> --subdomain myapp    # set custom subdomain
-spawned accounts domain delete <id>                   # remove domain
 spawned init --name <project> --aws-account <id>      # deploy to your account
 ```
