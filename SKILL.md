@@ -52,6 +52,7 @@ Spawned is a declarative platform — you can include all components (Container,
 ```json
 {
   "version": "1.0",
+  "imports": [{ "project": "shared-infra" }],
   "components": [
     { "type": "...", "name": "...", "values": { ... } }
   ]
@@ -69,15 +70,13 @@ Components should be ordered so that a component appears before any component th
 
 ---
 
-## Shared infrastructure and imports
+## Shared infrastructure
 
-Projects on spawned.ai's managed account have shared infrastructure already provisioned (typically a Network and LoadBalancer, but possibly also Databases, S3 Buckets, FileSystems, etc.). These are available for your components to reference — you don't need to create your own.
+Projects on spawned.ai's managed account have a shared project containing a Network (VPC) and LoadBalancer. When a project is created, the `"imports"` field is **autoinjected** into the initial `infra.json`, pointing to this shared project. This makes the shared VPC and LB available for `$ref` by name — you don't need to define them in `components`.
 
-Run `spawned init` to see a summary or `spawned list --shared` to get the full component JSON.
+When modifying or rewriting a project's infra.json, **preserve the existing `"imports"` field**. Removing it will break references to shared components.
 
-### Using imports (preferred)
-
-If a shared project exists, add `"imports"` to your infra.json. The backend resolves imports automatically — all components from the imported project become available for `$ref` by name. You don't need to redefine them in your `components` array.
+Run `spawned list --shared` to see what shared components are available.
 
 ```json
 {
@@ -102,23 +101,9 @@ If a shared project exists, add `"imports"` to your infra.json. The backend reso
 }
 ```
 
-No Network or LoadBalancer in `components` — they come from the import. Any component from the shared project (databases, buckets, filesystems, etc.) can be referenced the same way.
+No Network or LoadBalancer in `components` — they come from the import.
 
-### Inline data sources (when not using imports)
-
-If there is no shared project to import from, include the shared components inline with `is_data_source: true`. Run `spawned list --shared` to get the exact JSON, then place those components at the start of your `components` array.
-
-Example for the default spawned.ai managed account:
-
-```json
-{
-  "version": "1.0",
-  "components": [
-    {"type":"Network","name":"spawned-vpc","values":{"id":"spawned-vpc-network","name":"spawned-vpc","provider":"aws","is_data_source":true,"cidr_block":"10.0.0.0/16","subnets":[{"_type":"Subnet","id":"spawned-vpc_subnet_0-subnet","name":"spawned-vpc_subnet_0","provider":"aws","is_data_source":false,"cidr":"10.0.0.0/24","zone":"eu-central-1a","network_name":"spawned-vpc","public":true},{"_type":"Subnet","id":"spawned-vpc_subnet_1-subnet","name":"spawned-vpc_subnet_1","provider":"aws","is_data_source":false,"cidr":"10.0.1.0/24","zone":"eu-central-1b","network_name":"spawned-vpc","public":true},{"_type":"Subnet","id":"spawned-vpc_subnet_2-subnet","name":"spawned-vpc_subnet_2","provider":"aws","is_data_source":false,"cidr":"10.0.2.0/24","zone":"eu-central-1a","network_name":"spawned-vpc","public":false},{"_type":"Subnet","id":"spawned-vpc_subnet_3-subnet","name":"spawned-vpc_subnet_3","provider":"aws","is_data_source":false,"cidr":"10.0.3.0/24","zone":"eu-central-1b","network_name":"spawned-vpc","public":false}],"nat_gateway_enabled":true,"vpn_enabled":false,"dns_support":true}},
-    {"type":"LoadBalancer","name":"spawned-lb","values":{"id":"spawned-lb-loadbalancer","name":"spawned-lb","provider":"aws","is_data_source":true,"network":{"$ref":"spawned-vpc"},"public":true,"enable_https":true,"redirect_http_to_https":true,"health_check_path":"/"}}
-  ]
-}
-```
+For BYOA (bring-your-own-account) users: imports are not autoinjected. If you have your own shared project, add `"imports"` manually with the shared project name.
 
 ---
 
