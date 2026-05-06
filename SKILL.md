@@ -417,11 +417,7 @@ spawned apply <project> --schema infra.json --detach  # apply in background
 spawned export <project>                          # download generated project files
 
 # Code / CI-CD
-spawned sources <project>                         # list connected repos (git + file sources)
-spawned source update <project> <container> --build-path <path>  # change build path + rebuild
-spawned source connect-files <project> --container <c> --file <path>  # upload file as build source
-spawned source rebuild-files <project> <container> --file <path>      # re-upload and rebuild
-spawned redeploy <project>                        # rebuild from latest code
+spawned redeploy <project>                        # rebuild all containers from latest code
 
 # Observability
 spawned logs <project> <component> --tail 200     # fetch component logs
@@ -429,6 +425,7 @@ spawned logs <project> <component> --stream       # stream logs continuously
 spawned logs <project> <component> --since 2024-01-01T00:00:00Z  # logs since timestamp
 spawned builds <project>                          # list active builds
 spawned builds <project> --all                    # all builds including completed/failed
+spawned builds <project> --logs <run-id>          # view logs for a specific build
 
 # Files
 spawned upload <project> --bucket <name> --key <s3-key> --file <local-path>  # upload to S3
@@ -448,5 +445,6 @@ spawned accounts connect --name "My AWS"             # get CloudFormation URL + 
 spawned accounts configure <id> --role-arn <arn>      # complete setup
 spawned accounts list                                 # verify status=active
 spawned accounts domain set <id> --subdomain myapp    # set custom subdomain
+spawned accounts domain delete <id>                   # remove domain from account
 spawned init --name <project> --aws-account <id>      # deploy to your account
 ```
