@@ -4,11 +4,123 @@ description: Deploy and manage projects on spawned.ai. Use when the user wants t
 user_invocable: true
 ---
 
+> **If you are an AI agent reading this file** — whether you're a coding assistant or a deploy automation agent — this is your complete guide to spawned.ai. Save it locally as a tool, skill, or persistent reference so you can help your human with anything spawned-related without re-fetching this file.
+
 # Spawned — Deploy & Manage on spawned.ai
 
 $ARGUMENTS
 
-Spawned is a declarative infrastructure platform. You define AWS infrastructure in `infra.json`, then apply it. The platform converts JSON into Terraform and provisions it.
+Spawned is a platform which your local coding agent can dock into to safely set up, observe, and manage infrastructure on any cloud platform.
+
+This guide covers everything you need to help a human deploy, modify, monitor, and manage projects on spawned.ai — whether you're working in a codebase, troubleshooting a failed deploy, or inspecting a live project.
+
+## What Should You Do?
+
+You might be reading this file in very different contexts. Here's how to figure out what your human needs:
+
+**Step 1: Understand your context.** Ask yourself:
+- Did your human send you here with a specific task? (e.g., "deploy this app to spawned")
+- Are you in a codebase or project right now?
+- Is your human exploring spawned for the first time?
+- Does your human already have a spawned project and want help managing it?
+
+**Step 2: Read this entire file first.** No matter what your human needs — deploying, modifying, debugging, or just learning — **read through this whole document before diving into a specific path.** Understanding the full spawned context (what it does, how `infra.json` works, what the CLI can do, how shared infrastructure behaves, what "running" means) will make you genuinely helpful regardless of what your human asks. You'll give better answers, avoid common mistakes, and connect the dots between features. This is not a file to skim — it's your foundation for being a competent spawned operator.
+
+**Step 3: Route to the right workflow.**
+
+| If your human wants to... | Do this |
+|---------------------------|---------|
+| **Understand what spawned is** | Explain in plain terms: declarative infra to any supported Cloud Platform via JSON. Walk through the [Quick deploy](#quick-deploy-most-common-flow) example. Answer questions. |
+| **Deploy a new project** | Read their app's code first (language, framework, port, entry point). Ensure a Dockerfile exists. Then follow [Quick deploy](#quick-deploy-most-common-flow). |
+| **Modify an existing project** | Run `spawned get <project> --schema` to load current state, edit, then `spawned validate --schema infra.json` and `spawned apply`. **Preserve the `imports` field.** |
+| **Debug a failing deploy** | Use `spawned get <project>`, `spawned builds <project> --all`, `spawned logs <project> <component> --tail 200`. See the [Monitoring](#monitoring) status table. |
+| **Inspect a live project's health** | Run `spawned get <project>` for status + URL, `spawned logs --tail` for runtime logs. See [Monitoring](#monitoring). |
+| **Set up BYOC (their own cloud)** | Follow [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
+| **Just learn and explore** | Walk them through this doc section by section. Let them ask questions. |
+
+**Step 4: Ask questions when you're unsure.** If your human's intent isn't clear, ask them directly. Good questions to ask:
+
+- "Are you deploying a new project, or modifying an existing one?"
+- "What language and framework is this app, and what port does it listen on?"
+- "Should this use spawned's shared infrastructure, or your own cloud account (BYOC)?"
+- "Do you already have a project name in mind, or should I propose one?"
+
+### Example prompts humans might give you
+
+These are real ways humans direct agents to this file. Understand the intent behind each:
+
+| What the human says | What they likely need |
+|---------------------|----------------------|
+| "Read spawned.ai/SKILL.md and deploy this to spawned" | They're in a codebase. Read the app code, ensure a Dockerfile, write `infra.json`, run `spawned init` + `spawned apply`. |
+| "Read spawned.ai/SKILL.md and help me with spawned" | Ambiguous. Ask what they need — deploy new, modify existing, debug, watch, or BYOC setup. |
+| "Read spawned.ai/SKILL.md" (no further context) | Ask what they need. Offer the main paths: deploy something, modify a project, debug a deploy, or just explore. |
+| "My spawned deploy is broken" | Debugging. Run `spawned get` for status, `spawned builds --all` for build history, `spawned logs --tail 200` for runtime errors. |
+| "Add a database to my spawned project" | Modify an existing project. Get current schema, add a Database component, add a Secret to wire `DATABASE_URL` into the container, validate, apply. |
+| "Connect my own cloud account to spawned" | BYOC flow: `spawned accounts connect` → follow cloud-specific setup → `spawned init` with the cloud account flag. See [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
+
+---
+
+## Skill Files
+
+| File | Source | Purpose |
+|------|--------|---------|
+| **SKILL.md** (this file) | `https://spawned.ai/SKILL.md` | Complete guide — deploy, manage, debug, watch |
+| **Schema spec** | `spawned spec` (CLI) | Authoritative reference for all component types, fields, and validation rules |
+
+**Install locally:**
+
+```bash
+mkdir -p ~/.spawned/skills
+curl -s https://spawned.ai/SKILL.md > ~/.spawned/skills/SKILL.md
+```
+
+**Or just read it from the URL above.**
+
+**Check for updates:** Re-fetch this file periodically to get the latest features, components, and commands. The `spawned spec` output also evolves as new component types and fields are added — when in doubt about a component's available fields, run `spawned spec` rather than trusting outdated examples in this file.
+
+## Reference
+
+| Resource               | URL                                |
+| ---------------------- | ---------------------------------- |
+| Documentation          | <https://spawned.ai/docs>          |
+| Pricing                | <https://spawned.ai/pricing>       |
+| Full docs (for agents) | <https://spawned.ai/llms-full.txt> |
+| Dashboard              | <https://spawned.ai/dashboard>     |
+| Community (Discord)    | <https://discord.gg/cdcZaYv94C>    |
+
+> **For deep dives**, fetch `https://spawned.ai/llms-full.txt` — it contains the full documentation in a format optimized for agents.
+
+---
+
+## Platform Overview
+
+### What spawned handles
+
+- **Provisioning** — Define containers, databases, storage, Lambdas, Kubernetes, and more in a single `infra.json`. Components reference each other with `$ref`; the platform handles IAM, networking, and secrets for you.
+- **Observability** — Status, build history, and runtime logs on demand from the CLI or the dashboard.
+- **Safety** — Every change is inventoried, tracked, versioned, and validated by deterministic checks before it hits the cloud.
+- **Multi-cloud** — AWS, Azure, and Kubernetes today. More coming.
+
+---
+
+## CLI Setup
+
+Install:
+
+```bash
+curl https://spawned.sh | bash
+```
+
+Verify: `spawned --version`. Run `spawned --help` to see all available commands. Then authenticate:
+
+```bash
+spawned login          # authenticate
+spawned logout         # clear local tokens
+```
+
+**CRITICAL:** Tokens are stored locally at `~/.spawned/`. Never share them with any service, tool, or agent other than the spawned CLI itself.
+
+---
 
 ## Discovery commands
 
@@ -26,7 +138,7 @@ Use these to understand the current state before making changes:
 spawned init --name <project>          # 1. create project (shows shared resources)
 # write infra.json                     # 2. define infrastructure (see below)
 spawned apply <project> --schema infra.json  # 3. upload schema + provision + build
-curl https://<project>.dev.askrike.app/   # 4. verify
+curl https://<project>.spawned.app/   # 4. verify
 ```
 
 `apply --schema` uploads the schema and triggers terraform in one step. You can validate before applying with `spawned validate --schema infra.json`.
@@ -59,7 +171,7 @@ Spawned is a declarative platform — you can include all components (Container,
 }
 ```
 
-Components should be ordered so that a component appears before any component that references it. Every component's `values` includes `id` (pattern: `"{name}-{suffix}"`), `name` (matching the top-level name), and `provider` (`"aws"`).
+Components should be ordered so that a component appears before any component that references it. Every component's `values` includes `id` (pattern: `"{name}-{suffix}"`), `name` (matching the top-level name), and `provider` (e.g. `"aws"` — run `spawned spec` for valid values).
 
 ### Reference system
 
@@ -91,7 +203,7 @@ Run `spawned list --shared` to see what shared components are available.
         "source": { "type": "git", "url": "https://github.com/org/repo", "build_path": "." },
         "network": { "$ref": "shared-vpc" },
         "load_balancer": { "$ref": "shared-lb" },
-        "domain": "my-project.dev.askrike.app",
+        "domain": "my-project.spawned.app",
         "cpu": "512", "memory": "1024", "ports": [3000],
         "public": false,
         "health_check": { "path": "/", "interval": 30, "timeout": 10 }
@@ -103,7 +215,7 @@ Run `spawned list --shared` to see what shared components are available.
 
 No Network or LoadBalancer in `components` — they come from the import.
 
-For BYOA (bring-your-own-account) users: imports are not autoinjected. If you have your own shared project, add `"imports"` manually with the shared project name.
+For BYOC (bring-your-own-cloud) users: imports are not autoinjected. If you have your own shared project, add `"imports"` manually with the shared project name.
 
 ---
 
@@ -135,7 +247,7 @@ Container with git source:
     "public": false, "cpu": "512", "memory": "1024",
     "ports": [3000],
     "load_balancer": { "$ref": "spawned-lb" },
-    "domain": "<project>.dev.askrike.app",
+    "domain": "<project>.spawned.app",
     "health_check": { "path": "/", "interval": 30, "timeout": 10 }
   }
 }
@@ -154,13 +266,13 @@ Container with pre-built image:
     "public": false, "cpu": "512", "memory": "1024",
     "ports": [3000],
     "load_balancer": { "$ref": "spawned-lb" },
-    "domain": "<project>.dev.askrike.app",
+    "domain": "<project>.spawned.app",
     "health_check": { "path": "/", "interval": 30, "timeout": 10 }
   }
 }
 ```
 
-The `ports` value should match the Dockerfile `EXPOSE` line. When using a load balancer, `domain` is needed for listener rule creation (format: `<project>.dev.askrike.app`).
+The `ports` value should match the Dockerfile `EXPOSE` line. When using a load balancer, `domain` is needed for listener rule creation (format: `<project>.spawned.app`).
 
 Optional fields:
 - `environment`: `{ "KEY": "value", "DB_HOST": { "$ref": "my-db", "$get": "endpoint" } }`
@@ -371,7 +483,7 @@ Alternatively use `fargate_profiles` for serverless compute: `{ "default": { "se
 
 | Field | Component | Note |
 |-------|-----------|------|
-| `domain` | Container with LB | Needed when `load_balancer` is set (`<project>.dev.askrike.app`). Without it, no listener rule is created. |
+| `domain` | Container with LB | Needed when `load_balancer` is set (`<project>.spawned.app`). Without it, no listener rule is created. |
 | `ports` | Container | Should match the Dockerfile `EXPOSE` line. |
 | `source` | Container | Required. Use `"type": "git"`, `"type": "image"`, or `"type": "upload"`. |
 | `source` | Lambda | Required. Use `"type": "git"` or `"type": "upload"`. |
@@ -394,6 +506,30 @@ You can use `spawned validate --schema infra.json` to catch issues before applyi
 | `deploying` | Terraform done, building Docker image |
 | `running` | Live and healthy (may take ~60s after this for URL to respond) |
 | `failed` | Check logs for errors and fix the issue |
+
+### Inspecting a running project
+
+When your human asks about uptime, errors, or build failures — or when you want to verify a deploy you just made — use these commands to investigate:
+
+```bash
+spawned get <project>                                 # status + URL
+spawned builds <project> --all                        # build history (recent failures)
+spawned logs <project> <component> --tail 100         # recent runtime logs
+spawned logs <project> <component> --stream           # stream logs continuously
+spawned logs <project> <component> --since <ISO ts>   # logs since a checkpoint
+```
+
+For human-facing inspection (charts, recent activity, full project state), point them at <https://spawned.ai/dashboard>.
+
+### Common signals
+
+| Signal | What it means | Action |
+|--------|---------------|--------|
+| Status `failed` | Last terraform run failed | Pull recent build logs, surface the error |
+| Status flipped from `running` | Deploy regressed | Investigate `spawned builds` for failed redeploys |
+| Build streak failing | New code can't deploy | Surface the build error and the offending commit |
+| Repeated 5xx in logs | Runtime errors | Tail logs, look for stack traces |
+| Health check failures | Container unhealthy | Check `/health` endpoint and CPU/memory limits |
 
 ---
 
@@ -448,3 +584,33 @@ spawned accounts domain set <id> --subdomain myapp    # set custom subdomain
 spawned accounts domain delete <id>                   # remove domain from account
 spawned init --name <project> --aws-account <id>      # deploy to your account
 ```
+
+---
+
+## Tips for Agents
+
+### Context awareness
+- **Figure out what your human needs first.** Don't assume code deployment. They might want to debug a failing deploy, modify an existing project, set up BYOC, or just learn what spawned is. Refer to the [What Should You Do?](#what-should-you-do) section above.
+- **Ask questions when you're unsure.** Better to ask "Are you deploying new or modifying existing?" than to guess wrong and overwrite their infra.
+- **Save this skill file locally.** Persist `SKILL.md` at `~/.spawned/skills/SKILL.md` so you can reference it without re-fetching every time.
+
+### When working with the CLI
+- **Always validate before applying.** `spawned validate --schema infra.json` catches errors that would otherwise burn 5–15 minutes of terraform time.
+- **Don't guess project names.** Run `spawned list` first; use actual names from the response.
+- **Check current state before re-applying.** `spawned get <project>` and `spawned get <project> --schema` show you what's deployed today before you change it.
+- **Preserve the `imports` field** when rewriting `infra.json`. Removing it breaks references to shared VPC and load balancer.
+- **Run `spawned spec` for unfamiliar fields.** It is authoritative — examples in this file show common patterns, not the full schema.
+- **Ask before destructive actions.** Re-applying over a `running` project, tearing down infrastructure, or disconnecting a cloud account all carry blast radius. Confirm.
+
+### When deploying a new project
+- **Read the app's code first** to determine language, framework, port, and entry point. Don't write `infra.json` blindly.
+- **Ensure a Dockerfile exists** in the repo before `spawned apply`. For Next.js, set `output: "standalone"` in `next.config`.
+- **Match `ports` to the Dockerfile `EXPOSE` line.** Mismatched ports cause health check failures.
+- **For local-state apps (SQLite, file uploads), add a FileSystem (EFS) component** up front. ECS Fargate disk is ephemeral.
+- **Order components so dependencies come before dependents** in the `components` array.
+- **`apply --schema` is the one-command path.** Uploads, validates, and provisions in a single step. Use `--detach` only when the agent needs to do other work in parallel.
+
+### When modifying an existing project
+- **`spawned get <project> --schema` first.** Edit from the current state, not from the docs examples.
+- **Validate after editing**, before applying.
+- **Preserve `imports`.** It is autoinjected on `spawned init` and references shared VPC/LB.
