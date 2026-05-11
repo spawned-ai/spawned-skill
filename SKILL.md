@@ -122,6 +122,14 @@ spawned logout         # clear local tokens
 
 ---
 
+Spawned is a declarative infrastructure platform. You define infrastructure in `infra.json`, then apply it.
+
+Two target platforms are supported:
+- **AWS** (default) — schema version `1.0`. `spawned apply` renders Terraform and provisions it directly.
+- **Kubernetes** — schema version `2.0`. `spawned apply` renders manifests and pushes them to the project's git repo; you apply them to your own cluster with argocd or kubectl. Spawned does not have access to your cluster.
+
+Pass `--platform kubernetes` on `spawned init` to opt into the Kubernetes path. The Kubernetes schema is **not** a subset of the AWS schema — component shapes differ. See [Kubernetes schema](#kubernetes-schema) below.
+
 ## Discovery commands
 
 Use these to understand the current state before making changes:
@@ -133,6 +141,8 @@ Use these to understand the current state before making changes:
 - `spawned validate --schema infra.json` — check for errors before applying
 
 ## Quick deploy (most common flow)
+
+This is the AWS flow. For Kubernetes, see [Kubernetes schema](#kubernetes-schema) — `apply` there renders manifests instead of provisioning.
 
 ```bash
 spawned init --name <project>          # 1. create project (shows shared resources)
@@ -172,6 +182,8 @@ Spawned is a declarative platform — you can include all components (Container,
 ```
 
 Components should be ordered so that a component appears before any component that references it. Every component's `values` includes `id` (pattern: `"{name}-{suffix}"`), `name` (matching the top-level name), and `provider` (e.g. `"aws"` — run `spawned spec` for valid values).
+
+This `version: "1.0"` structure (with `values`, `id`, `provider`) is the **AWS** schema. The Kubernetes schema (`version: "2.0"`) has a different shape — see [Kubernetes schema](#kubernetes-schema).
 
 ### Reference system
 
@@ -479,6 +491,65 @@ Alternatively use `fargate_profiles` for serverless compute: `{ "default": { "se
 
 ---
 
+## Kubernetes schema
+
+Use `--platform kubernetes` on `spawned init` to target a Kubernetes cluster. The `infra.json` is then version `2.0` with a flat component shape (no `values` wrapper, no `provider`, no `id`).
+
+```json
+{
+  "version": "2.0",
+  "platform": "kubernetes",
+  "config": { "namespace": "<namespace>" },
+  "components": [
+    { "type": "Volume", "name": "data", "size": "1Gi" },
+    {
+      "type": "Container",
+      "name": "web",
+      "image": "nginx:latest",
+      "port": 80,
+      "protocol": "http"
+    }
+  ],
+  "connections": [
+    { "from": "web", "to": "data", "mount_path": "/usr/share/nginx/html" }
+  ]
+}
+```
+
+Top-level keys: `version` (`"2.0"`), `platform` (`"kubernetes"`), `config.namespace`, `components`, `connections`.
+
+### Component types
+
+Run `spawned spec` for the authoritative field list. Available types on the Kubernetes path:
+
+- **Container** — `name`, `image`, `port`, `protocol` (`"http"` or `"tcp"`, default `"http"`), `env` (`{key: value}`), `cpu` (`0.25`, `0.5`, `1.0`, `2.0`; optional), `memory` (`"512Mi"`, `"1Gi"`, `"2Gi"`, `"4Gi"`; optional), `build` (optional — when set, CI builds the image from `build.context` and pushes to `image`). Renders as a Deployment + Service by default; promoted to a StatefulSet when a connection mounts a Volume into it.
+- **Volume** — `name`, `size` (Kubernetes quantity, e.g. `"1Gi"`), `storage_class` (optional). Renders as a PersistentVolumeClaim.
+- **Secret** — `name`, `data` (flat `{key: string-value}`). Values are passed through to a single Opaque Secret; consumers reference keys via a `Container → Secret` connection.
+- **Job** — same shape as Container minus networking. Optional `schedule` (cron string) renders a CronJob; absent renders a Job.
+- **ImportedDomain** — `name`, `zone_name`, `ingress_class` (default `"nginx"`). Metadata only — your cluster must already have a matching ingress controller and DNS write path.
+
+### Connections
+
+Top-level `connections` array. Each entry has `from`, `to`, and shape-specific params:
+
+| From → To | Params |
+|-----------|--------|
+| Container → Volume | `mount_path` (required). Upgrades source Container to a StatefulSet. |
+| Container → Secret | `keys` (list of Secret keys to project as env vars), `prefix` (optional). |
+| Container → Container | No params — gives `from` network/env access to `to`. |
+| Job → Volume / Job → Secret / Job → Container | Mirror the Container variants above. |
+| ImportedDomain → Container | `host` (FQDN under the domain's `zone_name`). Exposes the target Container externally; with `protocol: "http"` an Ingress is emitted, with `protocol: "tcp"` a LoadBalancer Service. |
+
+### Apply flow on Kubernetes
+
+`spawned apply <project> --schema infra.json` on a Kubernetes project **does not provision anything in your cluster**. It validates the schema, renders manifests, and pushes them to the project's git repo. Pull from `https://spawned.ai/projects/<project-id>.git` and apply with argocd or kubectl. The CLI prints the exact URL after `apply`.
+
+`spawned init --platform kubernetes` prints follow-up instructions including the argocd template docs at `https://spawned.ai/docs/manage/connections/kubernetes`.
+
+`--aws-account` is rejected on non-AWS platforms (`init` errors out). There is no equivalent "bring your own cluster" account-connection command — the cluster is whatever you point argocd/kubectl at.
+
+---
+
 ## Common pitfalls
 
 | Field | Component | Note |
@@ -497,7 +568,7 @@ You can use `spawned validate --schema infra.json` to catch issues before applyi
 
 ## Monitoring
 
-`spawned apply` streams terraform logs directly. If you used `--detach`, check with `spawned builds <project>` or `spawned get <project>`:
+`spawned apply` streams terraform logs directly on AWS projects. If you used `--detach`, check with `spawned builds <project>` or `spawned get <project>`:
 
 | Status | Meaning |
 |--------|---------|
@@ -531,6 +602,8 @@ For human-facing inspection (charts, recent activity, full project state), point
 | Repeated 5xx in logs | Runtime errors | Tail logs, look for stack traces |
 | Health check failures | Container unhealthy | Check `/health` endpoint and CPU/memory limits |
 
+For Kubernetes projects, `spawned apply` renders manifests and exits — there is no terraform stage and no runtime status from spawned. `spawned logs` is unavailable because the workload runs in your own cluster; use `kubectl logs` / `kubectl get` against your cluster instead.
+
 ---
 
 ## All commands
@@ -546,8 +619,9 @@ spawned validate --schema infra.json              # validate schema before apply
 spawned validate <project> --schema infra.json    # validate in context of a project
 
 # Project lifecycle
-spawned init --name <project>                     # create project
+spawned init --name <project>                     # create project (AWS, default)
 spawned init --name <project> --aws-account <id>  # on your own AWS
+spawned init --name <project> --platform kubernetes  # Kubernetes (manifests-only)
 spawned apply <project> --schema infra.json       # apply and stream terraform logs
 spawned apply <project> --schema infra.json --detach  # apply in background
 spawned export <project>                          # download generated project files
