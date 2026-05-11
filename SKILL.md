@@ -35,7 +35,7 @@ You might be reading this file in very different contexts. Here's how to figure 
 | **Modify an existing project** | Run `spawned get <project> --schema` to load current state, edit, then `spawned validate --schema infra.json` and `spawned apply`. **Preserve the `imports` field.** |
 | **Debug a failing deploy** | Use `spawned get <project>`, `spawned builds <project> --all`, `spawned logs <project> <component> --tail 200`. See the [Monitoring](#monitoring) status table. |
 | **Inspect a live project's health** | Run `spawned get <project>` for status + URL, `spawned logs --tail` for runtime logs. See [Monitoring](#monitoring). |
-| **Set up BYOC (their own cloud)** | Follow [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
+| **Set up BYOC (their own cloud)** | Currently AWS-only via `spawned accounts connect`. Follow [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
 | **Just learn and explore** | Walk them through this doc section by section. Let them ask questions. |
 
 **Step 4: Ask questions when you're unsure.** If your human's intent isn't clear, ask them directly. Good questions to ask:
@@ -56,7 +56,7 @@ These are real ways humans direct agents to this file. Understand the intent beh
 | "Read spawned.ai/SKILL.md" (no further context) | Ask what they need. Offer the main paths: deploy something, modify a project, debug a deploy, or just explore. |
 | "My spawned deploy is broken" | Debugging. Run `spawned get` for status, `spawned builds --all` for build history, `spawned logs --tail 200` for runtime errors. |
 | "Add a database to my spawned project" | Modify an existing project. Get current schema, add a Database component, add a Secret to wire `DATABASE_URL` into the container, validate, apply. |
-| "Connect my own cloud account to spawned" | BYOC flow: `spawned accounts connect` → follow cloud-specific setup → `spawned init` with the cloud account flag. See [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
+| "Connect my own cloud account to spawned" | BYOC is AWS-only today: `spawned accounts connect` → create CloudFormation stack → `spawned accounts configure <id> --role-arn <arn>` → `spawned init --name <project> --aws-account <id>`. See [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
 
 ---
 
@@ -70,8 +70,8 @@ These are real ways humans direct agents to this file. Understand the intent beh
 **Install locally:**
 
 ```bash
-mkdir -p ~/.spawned/skills
-curl -s https://spawned.ai/SKILL.md > ~/.spawned/skills/SKILL.md
+mkdir -p ~/.config/spawned/skills
+curl -s https://spawned.ai/SKILL.md > ~/.config/spawned/skills/SKILL.md
 ```
 
 **Or just read it from the URL above.**
@@ -108,7 +108,7 @@ curl -s https://spawned.ai/SKILL.md > ~/.spawned/skills/SKILL.md
 Install:
 
 ```bash
-curl https://spawned.sh | bash
+curl -fsSL https://spawned.sh/install.sh | bash
 ```
 
 Verify: `spawned --version`. Run `spawned --help` to see all available commands. Then authenticate:
@@ -118,7 +118,7 @@ spawned login          # authenticate
 spawned logout         # clear local tokens
 ```
 
-**CRITICAL:** Tokens are stored locally at `~/.spawned/`. Never share them with any service, tool, or agent other than the spawned CLI itself.
+**CRITICAL:** Tokens are stored locally at `~/.config/spawned/` (Mac/Linux) or `%LOCALAPPDATA%\spawned\` (Windows). Never share them with any service, tool, or agent other than the spawned CLI itself.
 
 ---
 
@@ -594,7 +594,7 @@ spawned init --name <project> --aws-account <id>      # deploy to your account
 ### Context awareness
 - **Figure out what your human needs first.** Don't assume code deployment. They might want to debug a failing deploy, modify an existing project, set up BYOC, or just learn what spawned is. Refer to the [What Should You Do?](#what-should-you-do) section above.
 - **Ask questions when you're unsure.** Better to ask "Are you deploying new or modifying existing?" than to guess wrong and overwrite their infra.
-- **Save this skill file locally.** Persist `SKILL.md` at `~/.spawned/skills/SKILL.md` so you can reference it without re-fetching every time.
+- **Save this skill file locally.** Persist `SKILL.md` at `~/.config/spawned/skills/SKILL.md` so you can reference it without re-fetching every time.
 
 ### When working with the CLI
 - **Always validate before applying.** `spawned validate --schema infra.json` catches errors that would otherwise burn 5–15 minutes of terraform time.
