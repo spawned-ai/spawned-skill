@@ -1,0 +1,11 @@
+{
+  "name": "spawned",
+  "version": "1.0.0",
+  "description": "Deploy and manage projects on spawned.ai. Use when the user wants to deploy, init, apply infrastructure, view logs, validate schemas, or manage spawned.ai projects.",
+  "author": {
+    "name": "spawned.ai",
+    "url": "https://spawned.ai"
+  },
+  "homepage": "https://spawned.ai",
+  "repository": "https://github.com/spawned-ai/spawned-skill"
+}

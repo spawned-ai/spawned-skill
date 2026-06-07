@@ -1,0 +1,17 @@
+{
+  "name": "spawned",
+  "owner": {
+    "name": "spawned.ai",
+    "url": "https://spawned.ai"
+  },
+  "metadata": {
+    "description": "Official spawned.ai marketplace: the spawned skill for deploying and managing infrastructure on spawned.ai."
+  },
+  "plugins": [
+    {
+      "name": "spawned",
+      "source": "./",
+      "description": "Deploy and manage projects on spawned.ai — declarative infrastructure across AWS / Azure / Kubernetes via a single JSON schema."
+    }
+  ]
+}
