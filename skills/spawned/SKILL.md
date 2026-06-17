@@ -123,6 +123,8 @@ spawned login          # authenticate (alias: signin)
 spawned logout         # clear local tokens (alias: signout)
 ```
 
+If a command fails because the user isn't authenticated, run `spawned login` to start the auth flow.
+
 **CRITICAL:** Tokens are stored locally at `~/.config/spawned/` (Mac/Linux) or `%LOCALAPPDATA%\spawned\` (Windows). Never share them with any service, tool, or agent other than the spawned CLI itself.
 
 For automation (CI), use API keys instead of user tokens. See [API keys](#api-keys).
