@@ -35,8 +35,8 @@ You might be reading this file in very different contexts. Here's how to figure 
 | **Modify an existing project** | Run `spawned get <project> --infra-json > infra.json` to load the current state, edit, then `spawned validate <project>` and `spawned apply <project>`. The project ref accepts `name`, `/name` (explicit personal org), `org/name` (team org), or a UUID. |
 | **Debug a failing deploy** | Use `spawned get <project>`, `spawned builds <project> --all`, `spawned logs <project> <component> --since <ISO ts>`. See the [Monitoring](#monitoring) status table. |
 | **Inspect a live project's health** | Run `spawned get <project>` for status + URL, `spawned logs <project> <component>` for runtime logs. See [Monitoring](#monitoring). |
-| **Set up BYOC (their own cloud)** | Currently AWS-only via `spawned accounts connect`. Follow [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
-| **Work across multiple organizations** | Org is encoded in the positional ref: `org/name` on project commands and on `init`, `[org]` positional on `list` / `cluster list`. When omitted, the user's personal org is used. See [Organizations](#organizations). |
+| **Set up BYOC (their own cloud)** | Currently AWS-only via `spawned clouds connect`. Follow [Cloud connection](#cloud-connection-bring-your-own-cloud). |
+| **Work across multiple organizations** | Org is encoded in the positional ref: `org/name` on project commands and on `init`, `[org]` positional on `list` / `clouds` commands. When omitted, the user's personal org is used. See [Organizations](#organizations). |
 | **Just learn and explore** | Walk them through this doc section by section. Let them ask questions. |
 
 **Step 4: Ask questions when you're unsure.** If your human's intent isn't clear, ask them directly. Good questions to ask:
@@ -57,7 +57,7 @@ These are real ways humans direct agents to this file. Understand the intent beh
 | "Read spawned.ai/SKILL.md" (no further context) | Ask what they need. Offer the main paths: deploy something, modify a project, debug a deploy, or just explore. |
 | "My spawned deploy is broken" | Debugging. Run `spawned get` for status, `spawned builds --all` for build history, `spawned logs <project> <component>` for runtime errors. |
 | "Add a database to my spawned project" | Modify an existing project. `get --infra-json`, add a Database component, add a `Container → Database` connection, validate, apply. |
-| "Connect my own cloud account to spawned" | BYOC is AWS-only today: `spawned accounts connect` → create CloudFormation stack → `spawned accounts configure <id> --role-arn <arn>` → `spawned init <name> --aws-account <id>`. See [AWS account connection](#aws-account-connection-bring-your-own-cloud). |
+| "Connect my own cloud account to spawned" | BYOC is AWS-only today: `spawned clouds connect` → create CloudFormation stack → `spawned clouds configure <cloud-id> --role-arn <arn>` → `spawned init <name> --cloud <cloud-id>`. See [Cloud connection](#cloud-connection-bring-your-own-cloud). |
 
 ---
 
@@ -149,13 +149,13 @@ spawned apply <name>                                   # 3. apply (uses ./infra.
 
 The org is always derived from the ref. When the ref omits an org, the user's personal org is used. See [Organizations](#organizations).
 
-**Seed infra.json.** `spawned init` writes the seed `infra.json` into the current directory automatically (skips silently if one already exists). The seed includes platform-appropriate defaults: an Azure resource group + location, a Kubernetes namespace (and cluster defaults if `--cluster` was passed), or (on the spawned-managed AWS account) an `ImportedNetwork` component referencing the shared VPC. Authoring `infra.json` from scratch will skip those defaults and your apply may fail downstream — always edit from the seed (or from `spawned get <project> --infra-json` for an existing project).
+**Seed infra.json.** `spawned init` writes the seed `infra.json` into the current directory automatically (skips silently if one already exists). The seed includes platform-appropriate defaults: an Azure resource group + location, a Kubernetes namespace (and cluster defaults if `--cloud` was passed), or (on the spawned-managed AWS account) an `ImportedNetwork` component referencing the shared VPC. Authoring `infra.json` from scratch will skip those defaults and your apply may fail downstream — always edit from the seed (or from `spawned get <project> --infra-json` for an existing project).
 
 **Platform selection.** `--platform` defaults to `aws`. Use `--platform azure` or `--platform kubernetes` to target the other clouds.
 
-**BYOC.** Pass `--aws-account <id>` on `spawned init` to deploy into a connected AWS account. See [AWS account connection](#aws-account-connection-bring-your-own-cloud).
+**BYOC.** Pass `--cloud <name-or-id>` on `spawned init` to deploy into a connected AWS account (names and IDs come from `spawned clouds list`). See [Cloud connection](#cloud-connection-bring-your-own-cloud).
 
-**Cluster pick for K8s.** `--cluster <name-or-id>` on `spawned init --platform kubernetes` bakes a registered cluster's defaults (namespace, ingress class, DNS hooks) into the project's target config. Without it, the project gets a unique namespace and you bring your own cluster.
+**Cluster pick for K8s.** `--cloud <name-or-id>` on `spawned init --platform kubernetes` bakes a registered cluster's defaults (namespace, ingress class, DNS hooks) into the project's target config. Registered clusters show up in `spawned clouds list` with provider `kubernetes`. Without the flag, the project gets a unique namespace and you bring your own cluster.
 
 **Shared infra.** Pass `--shared` on `spawned init` to mark the project as shared infrastructure (imports/exports between projects).
 
@@ -168,15 +168,16 @@ The org is always derived from the ref. When the ref omits an org, the user's pe
 Use these to understand current state before making changes:
 
 - `spawned schema`: full schema reference covering every component type, every field, and every connection's params. Authoritative and live (fetched from the backend).
-- `spawned schema <project>`: same, but filtered for that project's AWS account (components disabled for that account are stripped).
+- `spawned schema <project>`: same, but filtered for that project's cloud (components disabled for that cloud are stripped).
 - `spawned schema --component <Name>`: detail for one component (any platform that defines it).
 - `spawned schema --platform <name>`: narrow to one platform (`aws | azure | kubernetes`). Combinable with `--component`.
-- `spawned get <project>`: project status, URL, AWS account if any, organization.
+- `spawned get <project>`: project status, URL, cloud if any, organization.
 - `spawned get <project> --infra-json`: the current infra.json for an existing project.
 - `spawned list [org]`: your projects in your personal org, or in the named team org.
 - `spawned validate`: standalone validation of `./infra.json` (no project context). Pass `--infra-json <path>` to point at a different file, or pipe via stdin.
 - `spawned validate <project>`: validate against a project's context (required when the schema references shared infra via `imports`).
 - `spawned repos`: list GitHub repos accessible via the spawned GitHub App, grouped by installation. Useful when you want to confirm spawned has access to a repo before referencing it in a build.
+- `spawned clouds list [org]`: the clouds an org can deploy to — connected AWS accounts, registered Kubernetes clusters, and the spawned.ai managed cloud. Pass a cloud's name or ID to `spawned init --cloud`.
 
 ---
 
@@ -298,7 +299,7 @@ These cover the common shapes. For the full catalog (each component's fields, ea
 
 What this does: `Network → *` puts everything in the same VPC; `LoadBalancer → Container` exposes the API behind the ALB; `Container → Database` opens the security group and auto-injects connection env vars (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) into the Container.
 
-**On the spawned-managed AWS account.** When you `spawned init <name>` without `--aws-account`, the backend stamps an `ImportedNetwork` component into your seeded schema (referencing the shared VPC) instead of a fresh `Network`. Don't delete it; reference it by name from your other components' connections. The seed `infra.json` is written into your cwd; open it after `init` to see exactly what defaults were applied. For an existing project, run `spawned get <project> --infra-json` to see the current state.
+**On the spawned-managed AWS account.** When you `spawned init <name>` without `--cloud`, the backend stamps an `ImportedNetwork` component into your seeded schema (referencing the shared VPC) instead of a fresh `Network`. Don't delete it; reference it by name from your other components' connections. The seed `infra.json` is written into your cwd; open it after `init` to see exactly what defaults were applied. For an existing project, run `spawned get <project> --infra-json` to see the current state.
 
 ### AWS: persistent storage (Container + Volume)
 
@@ -351,7 +352,7 @@ The Volume needs to live in the same Network as its consumer (EFS lives in VPC s
 
 K8s shape differences worth knowing: `image` is top-level (no `source` wrapper); `ports` is a list of port objects with `name` / `port` / `protocol`; a Container with a Volume mount is promoted to a StatefulSet automatically.
 
-To expose a K8s Container externally: add an `ImportedDomain` and a `Domain → Container` connection with a `host` param. With `protocol: "http"` the connection emits an Ingress; with `protocol: "tcp"` it emits a LoadBalancer Service. The cluster must already have a matching ingress controller; that's a property of the cluster, not the schema. If the project was created with `--cluster <name-or-id>`, the cluster's defaults (ingress class, TLS, DNS auto-publish) are already in `target.config`.
+To expose a K8s Container externally: add an `ImportedDomain` and a `Domain → Container` connection with a `host` param. With `protocol: "http"` the connection emits an Ingress; with `protocol: "tcp"` it emits a LoadBalancer Service. The cluster must already have a matching ingress controller; that's a property of the cluster, not the schema. If the project was created with `--cloud <name-or-id>`, the cluster's defaults (ingress class, TLS, DNS auto-publish) are already in `target.config`.
 
 ### Azure
 
@@ -382,10 +383,9 @@ For Azure component fields, connection params, secret/vault wiring, and managed 
 | `health_check_path` | AWS LoadBalancer → Container | Default is `/`. If your app doesn't answer 200 on `/`, set this explicitly to a health endpoint your app serves (e.g. `/health`). Mismatched health checks fail silently for ~5 minutes during deploy. |
 | `ports` on the Dockerfile | AWS / K8s Container with build | The port your app listens on must match the `EXPOSE` line. Mismatches cause health-check failures. |
 | K8s `image` vs AWS `source.image` | Platform-specific | On K8s, image is top-level: `"image": "nginx:latest"`. On AWS, image is nested: `"source": { "image": "nginx:latest" }`. Don't cross the streams. |
-| `--aws-account` on non-AWS | CLI | Rejected by `spawned init`. AWS account binding only applies to `--platform aws`. |
-| `--cluster` on non-K8s | CLI | Rejected by `spawned init`. Cluster picks only apply to `--platform kubernetes`. |
+| `--cloud` on a platform without clouds | CLI | Rejected by `spawned init`. Cloud picks apply to `--platform aws` (account binding) and `--platform kubernetes` (cluster defaults). |
 | Authoring `infra.json` from scratch | Workflow | Skips the backend's seed defaults (resource group / namespace / shared network). For a new project, run `spawned init <name>` in the target directory — it writes the seed `infra.json` for you. For an existing project, pull with `spawned get <project> --infra-json > infra.json`. |
-| Targeting a team org | CLI | Encode the org in the positional ref: `spawned init team/app`, `spawned apply team/app`. For org-scoped listings, pass org as a positional: `spawned list team`, `spawned cluster list team`. |
+| Targeting a team org | CLI | Encode the org in the positional ref: `spawned init team/app`, `spawned apply team/app`. For org-scoped listings, pass org as a positional: `spawned list team`, `spawned clouds list team`. |
 
 Run `spawned validate --infra-json infra.json` (or with a project for import resolution) to catch issues before applying.
 
@@ -453,11 +453,11 @@ How to target a specific org per command:
 | Surface | Form |
 |---------|------|
 | Project commands (`init`, `apply`, `get`, `logs`, `export`, `validate`, `upload`, `builds`, `schema`) | `org/name` positional ref. Use `/name` to force the personal org when a name collides with an org slug. |
-| Org-scoped listings (`list`, `cluster list`) | `[org]` positional. Omit for personal org. |
+| Org-scoped commands (`list`, `clouds list`, `clouds connect`, `clouds configure`, `clouds domain`) | `[org]` positional. Omit for personal org. |
 
 `spawned init`, `spawned apply`, and `spawned upload` print a one-line banner (`Applying to <name> (org: <slug>)`) before mutating, so you can confirm the target.
 
-`spawned config` persists only the default AWS account, not an org (see the `# CLI defaults` block in [All commands](#all-commands)).
+`spawned config` persists only the default cloud (`--cloud`), not an org (see the `# CLI defaults` block in [All commands](#all-commands)).
 
 ---
 
@@ -480,7 +480,7 @@ The full key string is printed only at creation time. Save it immediately into t
 ```bash
 # Discovery
 spawned schema                                            # full infrastructure schema reference
-spawned schema <project>                                  # filtered to the project's AWS account
+spawned schema <project>                                  # filtered to the project's cloud
 spawned schema --component <Name>                         # detail for one component
 spawned schema --platform <aws|azure|kubernetes>          # narrow to one platform
 spawned list                                              # list projects in personal org
@@ -499,11 +499,11 @@ spawned repos --installation <id>                         # repos under one inst
 spawned init <name>                                       # create in personal org (AWS, default)
 spawned init /<name>                                      # explicit personal org (escape from org/name parsing)
 spawned init <org>/<name>                                 # create in a team org
-spawned init <name> --aws-account <id>                    # bring-your-own AWS
+spawned init <name> --cloud <name-or-id>                  # bring-your-own AWS (names/IDs from `spawned clouds list`)
 spawned init <name> --shared                              # mark as shared infrastructure
 spawned init <name> --platform azure                      # Azure
 spawned init <name> --platform kubernetes                 # Kubernetes (bring-your-own-cluster)
-spawned init <name> --platform kubernetes --cluster <ref> # Kubernetes with a registered cluster's defaults
+spawned init <name> --platform kubernetes --cloud <ref>   # Kubernetes with a registered cluster's defaults
 spawned apply <project>                                   # apply ./infra.json and stream workflow logs
 spawned apply <project> --infra-json <path>               # explicit file path
 spawned apply <project> --detach                          # apply in background
@@ -518,21 +518,19 @@ spawned builds <project> --all                            # all builds including
 spawned builds <project> --logs <run-id>                  # logs for a specific build run
 
 # Files
-spawned upload <project> --component <name> --key <s3-key> --file <local-path>
-                                                          # upload to a Bucket component
-                                                          # optional: --content-type <mime>
+spawned upload <project> --component <name> --file <local-path>
+                                                          # upload to a Bucket component (key defaults to the file basename)
+                                                          # optional: --key <s3-key> (override destination), --content-type <mime>
 
-# Organizations & clusters
+# Organizations
 spawned org list                                          # list orgs you belong to
-spawned cluster list                                      # K8s clusters in your personal org
-spawned cluster list <org>                                # K8s clusters in a team org
 
-# AWS accounts (BYOC)
-spawned accounts list
-spawned accounts connect [--name "Display name"]
-spawned accounts configure <account-id> --role-arn <arn> [--name "Display name"]
-spawned accounts domain set <account-id> --subdomain <name>
-spawned accounts domain delete <account-id>
+# Clouds (BYOC + cluster registry)
+spawned clouds list [org]                                 # AWS accounts, K8s clusters, and the managed cloud
+spawned clouds connect [org] [--name "Display name"]
+spawned clouds configure <cloud-id> [org] --role-arn <arn> [--name "Display name"]
+spawned clouds domain set <cloud-id> [org] --subdomain <name>
+spawned clouds domain delete <cloud-id> [org]
 
 # API keys
 spawned apikeys create <name>
@@ -540,9 +538,9 @@ spawned apikeys list
 spawned apikeys revoke <key-id>
 
 # CLI defaults
-spawned config set account <value>        # only key supported is `account` (default --aws-account)
-spawned config get account
-spawned config unset account
+spawned config set cloud <cloud-id>       # only key supported is `cloud` (default --cloud; IDs from `spawned clouds list`)
+spawned config get cloud
+spawned config unset cloud
 
 # Auth
 spawned login                              # alias: signin
@@ -551,27 +549,29 @@ spawned logout                             # alias: signout
 
 ---
 
-## AWS account connection (bring your own cloud)
+## Cloud connection (bring your own cloud)
+
+Clouds belong to an organization; the `clouds` subcommands take an optional `[org]` positional (omit for your personal org). BYOC is AWS-only today.
 
 ```bash
-spawned accounts connect --name "My AWS"              # get CloudFormation URL + account ID
+spawned clouds connect --name "My AWS"                     # get CloudFormation URL + cloud ID
 # → open the URL in a browser, create the stack, copy the Role ARN from the Outputs tab
-spawned accounts configure <id> --role-arn <arn>      # complete setup
-spawned accounts list                                 # verify status=active
-spawned accounts domain set <id> --subdomain myapp    # optional: set a custom subdomain
-spawned accounts domain delete <id>                   # remove that subdomain
-spawned init <name> --aws-account <id>                # deploy into your account
+spawned clouds configure <cloud-id> --role-arn <arn>       # complete setup
+spawned clouds list                                        # verify status=active
+spawned clouds domain set <cloud-id> --subdomain myapp     # optional: set a custom subdomain
+spawned clouds domain delete <cloud-id>                    # remove that subdomain
+spawned init <name> --cloud <cloud-id>                     # deploy into your account
 ```
 
-To avoid passing `--aws-account` every time, persist a default:
+To avoid passing `--cloud` every time, persist a default:
 
 ```bash
-spawned config set account <id>                       # subsequent `spawned init` uses this account
-spawned config get account
-spawned config unset account
+spawned config set cloud <cloud-id>                   # subsequent `spawned init` uses this cloud
+spawned config get cloud
+spawned config unset cloud
 ```
 
-The stack grants spawned an IAM role that can provision into your account. On `spawned init --aws-account <id>`, the seed schema is plain; no `ImportedNetwork` is stamped because your account doesn't share a VPC with anyone. Add your own `Network` component if you want one.
+The stack grants spawned an IAM role that can provision into your account. On `spawned init --cloud <cloud-id>`, the seed schema is plain; no `ImportedNetwork` is stamped because your account doesn't share a VPC with anyone. Add your own `Network` component if you want one.
 
 ---
 
@@ -588,7 +588,7 @@ The stack grants spawned an IAM role that can provision into your account. On `s
 - **Don't guess project names.** Run `spawned list` (or `spawned list <org>` for a team org) first; use actual names from the response.
 - **Disambiguate with `org/name`** when the same project name exists in multiple orgs you belong to. Use `/name` to force your personal org if a name collides with an org slug.
 - **Check current state before re-applying.** `spawned get <project>` and `spawned get <project> --infra-json` show you what's deployed before you change anything.
-- **Run `spawned schema` for unfamiliar fields.** It is authoritative; examples in this file show the model, not the full catalog. `spawned schema --component <Name>` is the right call for a single component's fields. Add `--platform <name>` to narrow further, or pass a project ref to filter by what's enabled on that project's AWS account.
+- **Run `spawned schema` for unfamiliar fields.** It is authoritative; examples in this file show the model, not the full catalog. `spawned schema --component <Name>` is the right call for a single component's fields. Add `--platform <name>` to narrow further, or pass a project ref to filter by what's enabled on that project's cloud.
 - **Ask before destructive actions.** Re-applying over a `running` project, tearing down a Bucket/Database, or disconnecting a cloud account all carry blast radius. The CLI prints a `Applying to X (org: Y)` banner before mutating — surface that to the human and confirm.
 - **Don't manually delete the auto-seeded `ImportedNetwork`** on the spawned-managed AWS account. Removing it leaves your other components without a VPC.
 
