@@ -1,7 +1,7 @@
 ---
 name: spawned
 description: Deploy and manage projects on spawned.ai. Use when the user wants to deploy, init, apply infrastructure, view logs, validate schemas, or manage spawned.ai projects.
-user_invocable: true
+user-invocable: true
 ---
 
 > **If you are an AI agent reading this file** (whether you're a coding assistant or a deploy automation agent), this is your complete guide to spawned.ai. Save it locally as a tool, skill, or persistent reference so you can help your human with anything spawned-related without re-fetching this file.
@@ -149,7 +149,7 @@ spawned apply <name>                                   # 3. apply (uses ./infra.
 
 The org is always derived from the ref. When the ref omits an org, the user's personal org is used. See [Organizations](#organizations).
 
-**Seed infra.json.** `spawned init` writes the seed `infra.json` into the current directory automatically (skips silently if one already exists). The seed includes platform-appropriate defaults: an Azure resource group + location, a Kubernetes namespace (and cluster defaults if `--cloud` was passed), or (on the spawned-managed AWS account) an `ImportedNetwork` component referencing the shared VPC. Authoring `infra.json` from scratch will skip those defaults and your apply may fail downstream — always edit from the seed (or from `spawned get <project> --infra-json` for an existing project).
+**Seed infra.json.** `spawned init` writes the seed `infra.json` into the current directory automatically (if one already exists, it prints a notice to stderr and leaves the existing file alone). The seed includes platform-appropriate defaults: an Azure resource group + location, a Kubernetes namespace (and cluster defaults if `--cloud` was passed), or (on the spawned-managed AWS account) an `ImportedNetwork` component referencing the shared VPC. Authoring `infra.json` from scratch will skip those defaults and your apply may fail downstream — always edit from the seed (or from `spawned get <project> --infra-json` for an existing project).
 
 **Platform selection.** `--platform` defaults to `aws`. Use `--platform azure` or `--platform kubernetes` to target the other clouds.
 
@@ -172,6 +172,7 @@ Use these to understand current state before making changes:
 - `spawned schema --component <Name>`: detail for one component (any platform that defines it).
 - `spawned schema --platform <name>`: narrow to one platform (`aws | azure | kubernetes`). Combinable with `--component`.
 - `spawned get <project>`: project status, URL, cloud if any, organization.
+- `spawned get <project> --json`: the raw deployment outputs map as JSON — best for scripting (e.g. piping a value into `jq`).
 - `spawned get <project> --infra-json`: the current infra.json for an existing project.
 - `spawned list [org]`: your projects in your personal org, or in the named team org.
 - `spawned validate`: standalone validation of `./infra.json` (no project context). Pass `--infra-json <path>` to point at a different file, or pipe via stdin.
@@ -214,13 +215,11 @@ Each component is a flat object with:
 
 - `type` (required): the component class, e.g. `Container`, `Database`, `Bucket`. The set of valid types depends on the platform; `spawned schema` lists them per platform.
 - `name` (required): referenced by the `connections` array and (for AWS) used in derived cloud resource names. Must be unique within the project. Lowercase letters, digits, dashes.
-- Type-specific fields. Run `spawned schema --component <Name>` for the full per-component reference.
-
-There is no `values` wrapper, no `id` field, no `provider` field; those were part of the old `1.0` schema and have been removed.
+- Type-specific fields, set directly on the component object. Run `spawned schema --component <Name>` for the full per-component reference.
 
 ### Connections
 
-Components reference each other through a top-level `connections` array, **not** through inline `$ref` objects. Each entry has `from` (source component name), `to` (target component name), and any per-connection params required by the (source-type, target-type) pair:
+Components reference each other through a top-level `connections` array. Each entry has `from` (source component name), `to` (target component name), and any per-connection params required by the (source-type, target-type) pair:
 
 ```json
 "connections": [
@@ -377,8 +376,7 @@ For Azure component fields, connection params, secret/vault wiring, and managed 
 
 | Issue | Where | Note |
 |-------|-------|------|
-| Old `1.0`-style schema | Anywhere | If your example uses `version: "1.0"`, a `values` wrapper around component fields, an `id`/`provider` per component, or `$ref`/`$get`/`$connection`/`$mount` reference objects, it's outdated. Use the `2.0` shape and the `connections` array. |
-| `imports` field | Old skill mentions an autoinjected `imports` array. The runtime does not autoinject one. On spawned-managed AWS, an `ImportedNetwork` component is seeded into `components[]` instead. |
+| Recreating the shared network | spawned-managed AWS | `spawned init` seeds an `ImportedNetwork` component into `components[]` for the shared VPC. Connect your components to it instead of adding your own network component. |
 | Missing `Network` connection | AWS | Containers, Databases, Volumes, LoadBalancers, Functions on AWS must each have a `Network → <component>` connection. Without it, they have nowhere to live. |
 | `health_check_path` | AWS LoadBalancer → Container | Default is `/`. If your app doesn't answer 200 on `/`, set this explicitly to a health endpoint your app serves (e.g. `/health`). Mismatched health checks fail silently for ~5 minutes during deploy. |
 | `ports` on the Dockerfile | AWS / K8s Container with build | The port your app listens on must match the `EXPOSE` line. Mismatches cause health-check failures. |
@@ -404,14 +402,17 @@ The latest guide is always at https://spawned.ai/SKILL.md.
 
 `spawned apply` streams workflow logs live on AWS / Azure projects (terraform plan/apply, image build, deploy steps). On Kubernetes, `apply` exits after pushing manifests; there is nothing for spawned to stream from your cluster.
 
-If you used `--detach`, or if you want to inspect a running project:
+If you used `--detach`, or if you want to inspect a running project, poll `spawned get <project>`. It prints a per-component `Health:` section when the backend has health data, and otherwise a single `State:` line:
 
-| Status | Meaning |
-|--------|---------|
-| `pending` / `created` | Project exists, no apply yet |
-| `in_progress` | Workflow is running (terraform, build, deploy) |
-| `running` | Live and healthy (may take ~60s after this for URL to respond) |
-| `failed` | Last workflow run failed; pull logs to find the cause |
+| `spawned get` output | Meaning |
+|----------------------|---------|
+| `Health:` section, one `<component>: <health>` line each (e.g. `api: unhealthy (stopped)`) | Per-component health as the backend reports it |
+| `State: not deployed yet` | Project exists, no apply yet |
+| `State: deleting` | Project is being torn down |
+| `State: paused` | Project is paused |
+| `State: last deployment failed` | Last workflow run failed; pull logs to find the cause |
+
+`spawned list`'s STATUS column shows the raw lifecycle status (`pending`, `created`, `running`, `failed`); `spawned get` prefers the friendly `State:` wording above but falls back to printing the raw status verbatim for anything it doesn't specially map (e.g. `State: running` when the project has no per-component health data yet). To watch an in-flight apply after `--detach`, poll `spawned builds <project>` for the active run.
 
 ### Inspecting a running project
 
@@ -455,7 +456,7 @@ How to target a specific org per command:
 | Project commands (`init`, `apply`, `get`, `logs`, `export`, `validate`, `upload`, `builds`, `schema`) | `org/name` positional ref. Use `/name` to force the personal org when a name collides with an org slug. |
 | Org-scoped commands (`list`, `clouds list`, `clouds connect`, `clouds configure`, `clouds domain`) | `[org]` positional. Omit for personal org. |
 
-`spawned init`, `spawned apply`, and `spawned upload` print a one-line banner (`Applying to <name> (org: <slug>)`) before mutating, so you can confirm the target.
+`spawned apply` prints `Applying to <name> (org: <slug>)` and `spawned upload` prints `Uploading to <name> (org: <slug>)` to stderr before mutating; `spawned init` prints the project name and organization after creating. None of them pause for input, so confirm the target before running the command.
 
 `spawned config` persists only the default cloud (`--cloud`), not an org (see the `# CLI defaults` block in [All commands](#all-commands)).
 
@@ -468,10 +469,14 @@ For non-interactive use (CI, scripts): long-lived tokens stored on the spawned a
 ```bash
 spawned apikeys create "my-ci-key"     # creates a key; full value is shown ONCE
 spawned apikeys list                   # list keys with prefixes (no full value)
-spawned apikeys revoke <key-id>        # permanently revoke a key
+spawned apikeys revoke <key-id>        # permanently revoke a key; prompts for literal `yes` on stdin
 ```
 
 The full key string is printed only at creation time. Save it immediately into the secret manager you'll consume it from.
+
+To authenticate with a key, set the `SPAWNED_API_KEY` environment variable; the CLI uses it instead of the stored login tokens.
+
+`spawned apikeys revoke` prompts interactively for the literal string `yes` on stdin; a non-interactive shell must provide it (e.g. `echo yes | spawned apikeys revoke <key-id>`) or the command fails at the prompt.
 
 ---
 
@@ -486,6 +491,7 @@ spawned schema --platform <aws|azure|kubernetes>          # narrow to one platfo
 spawned list                                              # list projects in personal org
 spawned list <org>                                        # list projects in a team org
 spawned get <project>                                     # status + URL
+spawned get <project> --json                              # raw deployment outputs map (for scripting)
 spawned get <project> --infra-json                        # view current infra.json
 spawned validate                                          # validate ./infra.json standalone
 spawned validate --infra-json <path>                      # explicit file path
@@ -525,17 +531,17 @@ spawned upload <project> --component <name> --file <local-path>
 # Organizations
 spawned org list                                          # list orgs you belong to
 
-# Clouds (BYOC + cluster registry)
+# Clouds (BYOC + cluster registry); all subcommands accept an [org] positional (personal org when omitted)
 spawned clouds list [org]                                 # AWS accounts, K8s clusters, and the managed cloud
 spawned clouds connect [org] [--name "Display name"]
 spawned clouds configure <cloud-id> [org] --role-arn <arn> [--name "Display name"]
 spawned clouds domain set <cloud-id> [org] --subdomain <name>
-spawned clouds domain delete <cloud-id> [org]
+spawned clouds domain delete <cloud-id> [org]             # prompts for literal `yes` on stdin
 
 # API keys
 spawned apikeys create <name>
 spawned apikeys list
-spawned apikeys revoke <key-id>
+spawned apikeys revoke <key-id>                           # prompts for literal `yes` on stdin
 
 # CLI defaults
 spawned config set cloud <cloud-id>       # only key supported is `cloud` (default --cloud; IDs from `spawned clouds list`)
@@ -589,7 +595,7 @@ The stack grants spawned an IAM role that can provision into your account. On `s
 - **Disambiguate with `org/name`** when the same project name exists in multiple orgs you belong to. Use `/name` to force your personal org if a name collides with an org slug.
 - **Check current state before re-applying.** `spawned get <project>` and `spawned get <project> --infra-json` show you what's deployed before you change anything.
 - **Run `spawned schema` for unfamiliar fields.** It is authoritative; examples in this file show the model, not the full catalog. `spawned schema --component <Name>` is the right call for a single component's fields. Add `--platform <name>` to narrow further, or pass a project ref to filter by what's enabled on that project's cloud.
-- **Ask before destructive actions.** Re-applying over a `running` project, tearing down a Bucket/Database, or disconnecting a cloud account all carry blast radius. The CLI prints a `Applying to X (org: Y)` banner before mutating — surface that to the human and confirm.
+- **Ask before destructive actions.** Re-applying over a `running` project, tearing down a Bucket/Database, or disconnecting a cloud account all carry blast radius. `spawned apply` prints `Applying to X (org: Y)` and `spawned upload` prints `Uploading to X (org: Y)` on stderr before mutating, but neither pauses for input — confirm the target with the human before running the command.
 - **Don't manually delete the auto-seeded `ImportedNetwork`** on the spawned-managed AWS account. Removing it leaves your other components without a VPC.
 
 ### When deploying a new project
@@ -597,7 +603,7 @@ The stack grants spawned an IAM role that can provision into your account. On `s
 - **Ensure a Dockerfile exists** in the repo before you push a Container with `source.build`. For Next.js, set `output: "standalone"` in `next.config`.
 - **Match the Container port to the Dockerfile `EXPOSE` line.** Mismatched ports cause health-check failures.
 - **For local-state apps (SQLite, file uploads), add a Volume** up front. ECS Fargate disk is ephemeral.
-- **Order components however you like**: references in the `connections` array are resolved by `name`, not by file order. (Earlier orderings were required by the old `1.0` schema; not anymore.)
+- **Order components however you like**: references in the `connections` array are resolved by `name`, not by file order.
 
 ### When modifying an existing project
 - **`spawned get <project> --infra-json` first.** Edit from the current state, not from this doc's examples.
