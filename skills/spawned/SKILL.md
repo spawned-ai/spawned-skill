@@ -103,7 +103,7 @@ curl -s https://spawned.ai/SKILL.md > ~/.config/spawned/skills/SKILL.md
 
 ### What `spawned apply` actually does, per platform
 
-- **AWS / Azure**: Renders Terraform, runs `terraform apply` server-side, builds any `source.build` images/zips, pushes them, and updates the running services. `spawned apply` streams the workflow logs live until it finishes.
+- **AWS / Azure**: Renders Terraform, runs `terraform apply` server-side, builds any `source.git` images/zips, pushes them, and updates the running services. `spawned apply` streams the workflow logs live until it finishes.
 - **Kubernetes**: Renders manifests and pushes them to the project's git repo at `https://spawned.ai/projects/<project-id>.git`. **Spawned does not have access to your cluster.** You apply with `argocd` or `kubectl` against your own cluster.
 
 ---
@@ -140,16 +140,16 @@ spawned validate <name>                                # 2. validate before appl
 spawned apply <name>                                   # 3. apply (uses ./infra.json by default; streams workflow logs)
 ```
 
-**Project ref form.** Every project command — `init`, `apply`, `get`, `logs`, `export`, `validate`, `upload`, `builds`, `schema` — takes the project as a single positional arg. Accepted forms:
+**Project ref form.** Every project command (`init`, `apply`, `get`, `logs`, `export`, `validate`, `upload`, `builds`, `schema`) takes the project as a single positional arg. Accepted forms:
 
-- `name` — your personal org
-- `/name` — explicit personal org (use when a name collides with an org slug)
-- `org/name` — team org (use to disambiguate when the same name exists in multiple orgs)
-- a UUID — direct project id
+- `name`: your personal org
+- `/name`: explicit personal org (use when a name collides with an org slug)
+- `org/name`: team org (use to disambiguate when the same name exists in multiple orgs)
+- a UUID: direct project id
 
 The org is always derived from the ref. When the ref omits an org, the user's personal org is used. See [Organizations](#organizations).
 
-**Seed infra.json.** `spawned init` writes the seed `infra.json` into the current directory automatically (if one already exists, it prints a notice to stderr and leaves the existing file alone). The seed includes platform-appropriate defaults: an Azure resource group + location, a Kubernetes namespace (and cluster defaults if `--cloud` was passed), or (on the spawned-managed AWS account) an `ImportedNetwork` component referencing the shared VPC. Authoring `infra.json` from scratch will skip those defaults and your apply may fail downstream — always edit from the seed (or from `spawned get <project> --infra-json` for an existing project).
+**Seed infra.json.** `spawned init` writes the seed `infra.json` into the current directory automatically (if one already exists, it prints a notice to stderr and leaves the existing file alone). The seed includes platform-appropriate defaults: an Azure resource group + location, a Kubernetes namespace (and cluster defaults if `--cloud` was passed), or (on the spawned-managed AWS account) an `ImportedNetwork` component referencing the shared VPC. Authoring `infra.json` from scratch will skip those defaults and your apply may fail downstream, so always edit from the seed (or from `spawned get <project> --infra-json` for an existing project).
 
 **Platform selection.** `--platform` defaults to `aws`. Use `--platform azure` or `--platform kubernetes` to target the other clouds.
 
@@ -172,13 +172,13 @@ Use these to understand current state before making changes:
 - `spawned schema --component <Name>`: detail for one component (any platform that defines it).
 - `spawned schema --platform <name>`: narrow to one platform (`aws | azure | kubernetes`). Combinable with `--component`.
 - `spawned get <project>`: project status, URL, cloud if any, organization.
-- `spawned get <project> --json`: the raw deployment outputs map as JSON — best for scripting (e.g. piping a value into `jq`).
+- `spawned get <project> --json`: the raw deployment outputs map as JSON, best for scripting (e.g. piping a value into `jq`).
 - `spawned get <project> --infra-json`: the current infra.json for an existing project.
 - `spawned list [org]`: your projects in your personal org, or in the named team org.
-- `spawned validate`: standalone validation of `./infra.json` (no project context). Pass `--infra-json <path>` to point at a different file, or pipe via stdin.
+- `spawned validate`: standalone validation of `./infra.json` (no project context). Pass `--infra-json <path>` to point at a different file, or pipe the schema via stdin.
 - `spawned validate <project>`: validate against a project's context (required when the schema references shared infra via `imports`).
 - `spawned repos`: list GitHub repos accessible via the spawned GitHub App, grouped by installation. Useful when you want to confirm spawned has access to a repo before referencing it in a build.
-- `spawned clouds list [org]`: the clouds an org can deploy to — connected AWS accounts, registered Kubernetes clusters, and the spawned.ai managed cloud. Pass a cloud's name or ID to `spawned init --cloud`.
+- `spawned clouds list [org]`: the clouds an org can deploy to: connected AWS accounts, registered Kubernetes clusters, and the spawned.ai managed cloud. Pass a cloud's name or ID to `spawned init --cloud`.
 
 ---
 
@@ -236,31 +236,62 @@ Connection params per `(from-type, to-type)` pair come from `spawned schema` (ea
 
 **Cross-target connections** (rare): if you target multiple platforms in one project and need to wire a component on one platform to a component on another (e.g. `azure/Domain → kubernetes/Container`), put that entry in the top-level `connections` field at the same level as `targets`, not inside either target's local connections. Per-target connections stay reserved for same-target wiring.
 
-### Source for Containers and Functions
+### Source for Containers, Functions, and Buckets
 
-Container `source` is `source: { ... }` with **exactly one of**:
+Building from a git repo is an **AWS** capability. On AWS, `Container` and
+`Function` take a `source` object with **exactly one of** `image` or `git`.
+Kubernetes and Azure Containers have no `source` wrapper and no build
+directive: they take a top-level `image` that must already be a pushed URL
+(on Azure, add a `CustomImage` component to get a private registry to push
+into, then reference that URL in `image`).
 
-- `image`: a pre-built image URL (`"image": "nginx:latest"` or `"image": "ghcr.io/org/repo:tag"`).
-- `build`: a build directive (`"build": { "context": "frontend" }` runs Docker build from `frontend/`; CI pushes the result to the platform registry and the Container references it by a derived URL).
+AWS Container `source`:
+
+- `image`: a pre-built image URL (`"image": "nginx:latest"` or `"image": "ghcr.io/org/repo:tag"`). Nothing is built.
+- `git`: a build directive. `url` is required; `ref` (defaults to the repo's default branch), `context` (default `.`), `dockerfile` (default `Dockerfile`, relative to `context`), and `build_args` are optional. CI clones the repo, builds, and pushes to this deployment's registry on every change to the ref or build arguments; the Container references it by a derived URL.
 
 ```json
-{ "type": "Container", "name": "api", "source": { "image": "nginx:latest" }, "port": 80 }
-{ "type": "Container", "name": "web", "source": { "build": { "context": "frontend" } }, "port": 3000 }
+{ "type": "Container", "name": "api", "source": { "image": "nginx:latest" },
+  "ports": [{ "name": "http", "port": 80 }] }
+{ "type": "Container", "name": "web",
+  "source": { "git": { "url": "github.com/org/repo", "ref": "main", "context": "frontend" } },
+  "ports": [{ "name": "http", "port": 3000 }] }
 ```
 
-Function `source` is `source: { ... }` with exactly one of:
+AWS `Container` has **no `port` field**: declare `ports` as a list of
+`{ name, port }` objects. An AWS port has no `protocol` either. How a port is
+exposed is decided by which load balancer you attach (`LoadBalancer` → L7,
+`NetworkLoadBalancer` → L4). Azure `Container` is the one that takes a single
+required `port`.
 
-- `filename`: a pre-built zip path, workspace-relative (`"filename": "function.zip"`).
-- `build`: a build directive (`"build": { "context": "function", "commands": [...] }`). The build commands must produce `<context>/<cloud_name>.zip` in the build's working directory.
+AWS Function `source` takes exactly one of `image` or `git` too, paired with
+`package_type` (`"zip"`, the default, or `"image"`):
 
-Bucket components take a **top-level `build`** (no `source` wrapper) to upload built assets:
+- `package_type: "zip"` with `git`: `url`, `commands`, and `artifact` are all required, and the commands must produce `artifact` (a zip filename, relative to `context`). `ref` and `context` are optional. Set `runtime` and `handler` on the component itself.
+- `package_type: "image"`: either `source.image` (a pre-built image URL) or `source.git` with the same `context` / `dockerfile` shape as a Container. `runtime` and `handler` are ignored.
+
+```json
+{ "type": "Function", "name": "worker",
+  "source": { "git": { "url": "github.com/org/repo", "ref": "main",
+                       "commands": ["make build"], "artifact": "worker.zip" } },
+  "runtime": "python3.12", "handler": "main.handler" }
+```
+
+AWS `Bucket` takes an optional `source.git` whose content is synced into the
+bucket after `terraform apply`. Only `url` is required. `directory` (which
+directory of the repo gets synced, default: the whole repo) and `commands` (a
+build run at the repo root first) are **independent** knobs: use either, both,
+or neither:
 
 ```json
 { "type": "Bucket", "name": "static-site",
-  "build": { "context": "frontend", "commands": ["npm ci", "npm run build"], "output": "dist" } }
+  "source": { "git": { "url": "github.com/org/repo", "ref": "main",
+                       "commands": ["npm ci", "npm run build"], "directory": "dist" } } }
 ```
 
-If a Container has no `build` or `image` source, validation rejects it. Add a Dockerfile to the repo before pushing the schema with `source.build`. For Next.js apps, set `output: "standalone"` in `next.config`.
+A `source` that sets neither `image` nor `git`, or both, is rejected. Add a
+Dockerfile to the repo before pushing a schema with `source.git`. For Next.js
+apps, set `output: "standalone"` in `next.config`.
 
 ---
 
@@ -281,8 +312,8 @@ These cover the common shapes. For the full catalog (each component's fields, ea
     { "type": "Database", "name": "app-db", "db_name": "appdb", "username": "appuser" },
     {
       "type": "Container", "name": "api",
-      "source": { "build": { "context": "." } },
-      "port": 8000,
+      "source": { "git": { "url": "github.com/org/repo", "ref": "main" } },
+      "ports": [{ "name": "http", "port": 8000 }],
       "env": { "APP_ENV": "production" }
     }
   ],
@@ -315,7 +346,7 @@ ECS Fargate disk is ephemeral. For SQLite, uploads, or any local state, attach a
     {
       "type": "Container", "name": "app",
       "source": { "image": "myapp:latest" },
-      "port": 8080
+      "ports": [{ "name": "http", "port": 8080 }]
     }
   ],
   "connections": [
@@ -379,10 +410,12 @@ For Azure component fields, connection params, secret/vault wiring, and managed 
 | Recreating the shared network | spawned-managed AWS | `spawned init` seeds an `ImportedNetwork` component into `components[]` for the shared VPC. Connect your components to it instead of adding your own network component. |
 | Missing `Network` connection | AWS | Containers, Databases, Volumes, LoadBalancers, Functions on AWS must each have a `Network → <component>` connection. Without it, they have nowhere to live. |
 | `health_check_path` | AWS LoadBalancer → Container | Default is `/`. If your app doesn't answer 200 on `/`, set this explicitly to a health endpoint your app serves (e.g. `/health`). Mismatched health checks fail silently for ~5 minutes during deploy. |
-| `ports` on the Dockerfile | AWS / K8s Container with build | The port your app listens on must match the `EXPOSE` line. Mismatches cause health-check failures. |
+| `ports` on the Dockerfile | AWS Container with `source.git` | The port your app listens on must match the `EXPOSE` line. Mismatches cause health-check failures. |
 | K8s `image` vs AWS `source.image` | Platform-specific | On K8s, image is top-level: `"image": "nginx:latest"`. On AWS, image is nested: `"source": { "image": "nginx:latest" }`. Don't cross the streams. |
+| `port` vs `ports` | Platform-specific | AWS and K8s Containers take `ports: [{ "name": "http", "port": 8000 }]` and have no `port` field. Only Azure Containers take a single `port`. AWS ports have no `protocol`; K8s ports do. |
+| Building on K8s / Azure | Platform-specific | Only AWS builds from a repo. K8s and Azure Containers need an already-pushed `image` URL; there is no `build` or `source.git` on either. |
 | `--cloud` on a platform without clouds | CLI | Rejected by `spawned init`. Cloud picks apply to `--platform aws` (account binding) and `--platform kubernetes` (cluster defaults). |
-| Authoring `infra.json` from scratch | Workflow | Skips the backend's seed defaults (resource group / namespace / shared network). For a new project, run `spawned init <name>` in the target directory — it writes the seed `infra.json` for you. For an existing project, pull with `spawned get <project> --infra-json > infra.json`. |
+| Authoring `infra.json` from scratch | Workflow | Skips the backend's seed defaults (resource group / namespace / shared network). For a new project, run `spawned init <name>` in the target directory, which writes the seed `infra.json` for you. For an existing project, pull with `spawned get <project> --infra-json > infra.json`. |
 | Targeting a team org | CLI | Encode the org in the positional ref: `spawned init team/app`, `spawned apply team/app`. For org-scoped listings, pass org as a positional: `spawned list team`, `spawned clouds list team`. |
 
 Run `spawned validate --infra-json infra.json` (or with a project for import resolution) to catch issues before applying.
@@ -469,14 +502,14 @@ For non-interactive use (CI, scripts): long-lived tokens stored on the spawned a
 ```bash
 spawned apikeys create "my-ci-key"     # creates a key; full value is shown ONCE
 spawned apikeys list                   # list keys with prefixes (no full value)
-spawned apikeys revoke <key-id>        # permanently revoke a key; prompts for literal `yes` on stdin
+spawned apikeys revoke <key-id> --yes  # permanently revoke a key; without --yes it confirms on a terminal
 ```
 
 The full key string is printed only at creation time. Save it immediately into the secret manager you'll consume it from.
 
 To authenticate with a key, set the `SPAWNED_API_KEY` environment variable; the CLI uses it instead of the stored login tokens.
 
-`spawned apikeys revoke` prompts interactively for the literal string `yes` on stdin; a non-interactive shell must provide it (e.g. `echo yes | spawned apikeys revoke <key-id>`) or the command fails at the prompt.
+`spawned apikeys revoke` asks for confirmation, but only when stdin is an interactive terminal; in a non-interactive shell it fails immediately with an error instead of prompting. Pass `--yes` to confirm non-interactively.
 
 ---
 
@@ -536,12 +569,12 @@ spawned clouds list [org]                                 # AWS accounts, K8s cl
 spawned clouds connect [org] [--name "Display name"]
 spawned clouds configure <cloud-id> [org] --role-arn <arn> [--name "Display name"]
 spawned clouds domain set <cloud-id> [org] --subdomain <name>
-spawned clouds domain delete <cloud-id> [org]             # prompts for literal `yes` on stdin
+spawned clouds domain delete <cloud-id> [org] --yes       # without --yes it confirms on a terminal
 
 # API keys
 spawned apikeys create <name>
 spawned apikeys list
-spawned apikeys revoke <key-id>                           # prompts for literal `yes` on stdin
+spawned apikeys revoke <key-id> --yes                     # without --yes it confirms on a terminal
 
 # CLI defaults
 spawned config set cloud <cloud-id>       # only key supported is `cloud` (default --cloud; IDs from `spawned clouds list`)
@@ -595,12 +628,12 @@ The stack grants spawned an IAM role that can provision into your account. On `s
 - **Disambiguate with `org/name`** when the same project name exists in multiple orgs you belong to. Use `/name` to force your personal org if a name collides with an org slug.
 - **Check current state before re-applying.** `spawned get <project>` and `spawned get <project> --infra-json` show you what's deployed before you change anything.
 - **Run `spawned schema` for unfamiliar fields.** It is authoritative; examples in this file show the model, not the full catalog. `spawned schema --component <Name>` is the right call for a single component's fields. Add `--platform <name>` to narrow further, or pass a project ref to filter by what's enabled on that project's cloud.
-- **Ask before destructive actions.** Re-applying over a `running` project, tearing down a Bucket/Database, or disconnecting a cloud account all carry blast radius. `spawned apply` prints `Applying to X (org: Y)` and `spawned upload` prints `Uploading to X (org: Y)` on stderr before mutating, but neither pauses for input — confirm the target with the human before running the command.
+- **Ask before destructive actions.** Re-applying over a `running` project, tearing down a Bucket/Database, or disconnecting a cloud account all carry blast radius. `spawned apply` prints `Applying to X (org: Y)` and `spawned upload` prints `Uploading to X (org: Y)` on stderr before mutating, but neither pauses for input, so confirm the target with the human before running the command.
 - **Don't manually delete the auto-seeded `ImportedNetwork`** on the spawned-managed AWS account. Removing it leaves your other components without a VPC.
 
 ### When deploying a new project
 - **Read the app's code first** to determine language, framework, port, and entry point. Don't write `infra.json` blindly.
-- **Ensure a Dockerfile exists** in the repo before you push a Container with `source.build`. For Next.js, set `output: "standalone"` in `next.config`.
+- **Ensure a Dockerfile exists** in the repo before you push a Container with `source.git`. For Next.js, set `output: "standalone"` in `next.config`.
 - **Match the Container port to the Dockerfile `EXPOSE` line.** Mismatched ports cause health-check failures.
 - **For local-state apps (SQLite, file uploads), add a Volume** up front. ECS Fargate disk is ephemeral.
 - **Order components however you like**: references in the `connections` array are resolved by `name`, not by file order.
