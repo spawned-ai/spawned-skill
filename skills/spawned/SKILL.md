@@ -31,7 +31,7 @@ You might be reading this file in very different contexts. Here's how to figure 
 | If your human wants to... | Do this |
 |---------------------------|---------|
 | **Understand what spawned is** | Explain in plain terms: declarative infrastructure across AWS / Azure / Kubernetes via a single JSON schema. Walk through the [Canonical flow](#canonical-flow). Answer questions. |
-| **Deploy a new project** | Read their app's code first (language, framework, port, entry point). Ensure a Dockerfile exists if they want spawned to build it. Then follow the [Canonical flow](#canonical-flow). |
+| **Deploy a new project** | Read their app's code first (language, framework, entry point, anything that must stay running). Pick the compute shape with [Choosing compute](#choosing-compute); serverless is the default. Then follow the [Canonical flow](#canonical-flow). |
 | **Modify an existing project** | Run `spawned get <project> --infra-json > infra.json` to load the current state, edit, then `spawned validate <project>` and `spawned apply <project>`. The project ref accepts `name`, `/name` (explicit personal org), `org/name` (team org), or a UUID. |
 | **Debug a failing deploy** | Use `spawned get <project>`, `spawned builds <project> --all`, `spawned logs <project> <component> --since <ISO ts>`. See the [Monitoring](#monitoring) status table. |
 | **Inspect a live project's health** | Run `spawned get <project>` for status + URL, `spawned logs <project> <component>` for runtime logs. See [Monitoring](#monitoring). |
@@ -46,17 +46,19 @@ You might be reading this file in very different contexts. Here's how to figure 
 - "Which platform: AWS, Azure, or Kubernetes?"
 - "Do you already have a project name in mind, or should I propose one?"
 
+Ask at most one question about the infrastructure itself before the first deploy, and only when the answer would change the `infra.json`. Traffic, budget and latency are usually assumptions to state, not questions to ask; see [Choosing compute](#choosing-compute).
+
 ### Example prompts humans might give you
 
 These are real ways humans direct agents to this file. Understand the intent behind each:
 
 | What the human says | What they likely need |
 |---------------------|----------------------|
-| "Read spawned.ai/SKILL.md and deploy this to spawned" | They're in a codebase. Read the app code, ensure a Dockerfile, run `spawned init <name>` (which writes the seed `infra.json` into the current directory), edit it, then `spawned apply <name>`. |
+| "Read spawned.ai/SKILL.md and deploy this to spawned" | They're in a codebase. Read the app code, pick the shape with [Choosing compute](#choosing-compute), run `spawned init <name>` (which writes the seed `infra.json` into the current directory), edit it, then `spawned apply <name>`. |
 | "Read spawned.ai/SKILL.md and help me with spawned" | Ambiguous. Ask what they need: deploy new, modify existing, debug, or BYOC setup. |
 | "Read spawned.ai/SKILL.md" (no further context) | Ask what they need. Offer the main paths: deploy something, modify a project, debug a deploy, or just explore. |
 | "My spawned deploy is broken" | Debugging. Run `spawned get` for status, `spawned builds --all` for build history, `spawned logs <project> <component>` for runtime errors. |
-| "Add a database to my spawned project" | Modify an existing project. `get --infra-json`, add a Database component, add a `Container → Database` connection, validate, apply. |
+| "Add a database to my spawned project" | Modify an existing project. `get --infra-json`, add a `Database` (SQL) or a `KeyValueStore` (lookups by key, no idle cost), connect the workload to it, validate, apply. |
 | "Connect my own cloud account to spawned" | BYOC is AWS-only today: `spawned clouds connect` → create CloudFormation stack → `spawned clouds configure <cloud-id> --role-arn <arn>` → `spawned init <name> --cloud <cloud-id>`. See [Cloud connection](#cloud-connection-bring-your-own-cloud). |
 
 ---
@@ -295,11 +297,92 @@ apps, set `output: "standalone"` in `next.config`.
 
 ---
 
+## Choosing compute
+
+Infrastructure that idles costs the user money. Default to the cheapest shape that fits the code, state the assumption, and let them upgrade later: changing a component and running `spawned apply` is the whole upgrade path.
+
+**Default to a `Function`.** On AWS a Function serves HTTP through an `ImportedDomain → Function` connection (an API Gateway in front, no load balancer, no network), runs on a `schedule`, and costs nothing between invocations. A web app or an API that answers a request and waits for the next one belongs here. On GCP the `Container` is Cloud Run, which scales to zero: keep `min_instances` at 0 and `cpu` at 0.5 or less.
+
+**Choose an AWS `Container` only when the code needs a process that stays up**, and say which reason applies:
+
+- a request can run longer than 30 seconds, or the response streams (API Gateway limits);
+- the app holds connections open: websockets, server-sent events, long polling;
+- a worker must run continuously (queue consumer, bot), not on a schedule;
+- it needs more memory, CPU or a runtime than a function packages;
+- it keeps files on local disk that must survive (then add a `Volume`, or move them to a `Bucket`).
+
+Read the code for these before deciding: websocket libraries, streaming handlers, a `while True` loop, SQLite files. Do not ask the user what the code can tell you.
+
+**Serving an existing web app from a Function without changing its code.** Use the AWS Lambda Web Adapter: the app keeps listening on a port exactly as it does locally, and the adapter turns API Gateway events into HTTP requests. Keep the repo's Dockerfile and add one line before its `CMD`:
+
+```dockerfile
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 \
+  /lambda-adapter /opt/extensions/lambda-adapter
+```
+
+The app must listen on port 8080; if it listens elsewhere, set `AWS_LWA_PORT` in the Function's `env` (the adapter also honours `PORT`). If `/` does not answer 200, set `AWS_LWA_READINESS_CHECK_PATH` to a route that does. The adapter image is multi-arch, so `architecture` can stay at its default. Declare the Function as an image build:
+
+```json
+{
+  "type": "Function", "name": "web", "package_type": "image",
+  "source": { "git": { "url": "github.com/org/repo", "ref": "main" } },
+  "memory": 512, "timeout": 30,
+  "env": { "AWS_LWA_PORT": "3000" }
+}
+```
+
+Take this path whenever the user has a working app or Dockerfile and has not asked to restructure it. Rewrite the entry point as a handler (Mangum for ASGI, `serverless-wsgi` for WSGI) only when the user prefers a zip package over a container build or already has a handler. Streamed responses do not pass through API Gateway either way; an app that streams needs a `Container`.
+
+**Data.** `KeyValueStore` when the code looks items up by key; `Database` when it uses SQL or an ORM. A `Database` is an always-on instance billed per hour; say so when you add one. A Function needs a `Network → Function` connection only to reach a `Database` or `Volume`.
+
+**Size.** The smallest tier of everything: `memory: 256` on a Function, `cpu: 0.25` on a Container, the default `instance_class` on a Database. Raise a value after `spawned logs` or the dashboard shows it is needed, not before.
+
+**Fixed-cost components.** A `Network` on a BYOC account is a NAT gateway, a `LoadBalancer` is an ALB, a `Database` is an instance: each bills every hour it exists. A Function fronted by a domain needs none of them.
+
+**Questions.** Ask at most one before the first deploy, and only when the answer changes the document. The two that can:
+
+- "I'll deploy this as a function; the first request after idle time takes a moment. Fine for now, or is this production with latency-sensitive users?" Only when the code gives no hint.
+- "This needs an always-on container and a load balancer, billed hourly. OK, or should I try the serverless shape first?" Only when a container is required and the user has not stated a budget.
+
+Traffic volume rarely changes the choice; assume low and say so. If the user asked for advice on infrastructure rather than a deploy, up to three questions in one message are welcome.
+
+---
+
 ## Anchor examples
 
 These cover the common shapes. For the full catalog (each component's fields, each connection's params), use `spawned schema`.
 
-### AWS: web app with a database
+### AWS: serverless web app with a key-value store
+
+```json
+{
+  "version": "2.0",
+  "platform": "aws",
+  "config": {},
+  "components": [
+    {
+      "type": "Function", "name": "api",
+      "runtime": "python3.12", "handler": "app.handler",
+      "source": { "git": {
+        "url": "github.com/org/repo", "ref": "main",
+        "commands": ["pip install -r requirements.txt -t .", "zip -r api.zip ."],
+        "artifact": "api.zip"
+      } },
+      "memory": 256, "timeout": 30
+    },
+    { "type": "KeyValueStore", "name": "items", "partition_key": { "name": "id" } },
+    { "type": "ImportedDomain", "name": "zone", "zone_name": "example.com", "zone_id": "Z1D633PJN98FT9" }
+  ],
+  "connections": [
+    { "from": "zone", "to": "api", "host": "app.example.com" },
+    { "from": "api",  "to": "items" }
+  ]
+}
+```
+
+What this does: `ImportedDomain → Function` puts the function on `app.example.com` through an API Gateway, with TLS from the zone's certificate; `Function → KeyValueStore` grants item access and injects `ITEMS_TABLE`. There is no network, no load balancer and nothing running between requests. On the spawned-managed account, `spawned init` seeds an `ImportedDomain` for the platform zone: connect to that one, with `host` one label under its `zone_name`, instead of adding your own. `handler` is `module.function`; `app.handler` here is the Mangum or serverless-wsgi wrapper around the web app. To leave the app untouched, use the image build with the Lambda Web Adapter from [Choosing compute](#choosing-compute) instead of a zip.
+
+### AWS: web app with a database (always-on container)
 
 ```json
 {
@@ -327,7 +410,7 @@ These cover the common shapes. For the full catalog (each component's fields, ea
 }
 ```
 
-What this does: `Network → *` puts everything in the same VPC; `LoadBalancer → Container` exposes the API behind the ALB; `Container → Database` opens the security group and auto-injects connection env vars (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) into the Container.
+What this does: `Network → *` puts everything in the same VPC; `LoadBalancer → Container` exposes the API behind the ALB; `Container → Database` opens the security group and auto-injects connection env vars (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) into the Container. The container, the load balancer, the database and (on BYOC) the network each bill every hour they exist, so this is the shape for a process that must stay up, not the starting point; see [Choosing compute](#choosing-compute).
 
 **On the spawned-managed AWS account.** When you `spawned init <name>` without `--cloud`, the backend stamps an `ImportedNetwork` component into your seeded schema (referencing the shared VPC) instead of a fresh `Network`. Don't delete it; reference it by name from your other components' connections. The seed `infra.json` is written into your cwd; open it after `init` to see exactly what defaults were applied. For an existing project, run `spawned get <project> --infra-json` to see the current state.
 
@@ -408,7 +491,7 @@ For Azure component fields, connection params, secret/vault wiring, and managed 
 | Issue | Where | Note |
 |-------|-------|------|
 | Recreating the shared network | spawned-managed AWS | `spawned init` seeds an `ImportedNetwork` component into `components[]` for the shared VPC. Connect your components to it instead of adding your own network component. |
-| Missing `Network` connection | AWS | Containers, Databases, Volumes, LoadBalancers, Functions on AWS must each have a `Network → <component>` connection. Without it, they have nowhere to live. |
+| Missing `Network` connection | AWS | Containers, Databases, Volumes and LoadBalancers must each have a `Network → <component>` connection. A Function needs one only to reach a Database or Volume; otherwise leave it out, it runs outside the VPC and still reaches the internet. |
 | `health_check_path` | AWS LoadBalancer → Container | Default is `/`. If your app doesn't answer 200 on `/`, set this explicitly to a health endpoint your app serves (e.g. `/health`). Mismatched health checks fail silently for ~5 minutes during deploy. |
 | `ports` on the Dockerfile | AWS Container with `source.git` | The port your app listens on must match the `EXPOSE` line. Mismatches cause health-check failures. |
 | K8s `image` vs AWS `source.image` | Platform-specific | On K8s, image is top-level: `"image": "nginx:latest"`. On AWS, image is nested: `"source": { "image": "nginx:latest" }`. Don't cross the streams. |
@@ -633,7 +716,7 @@ The stack grants spawned an IAM role that can provision into your account. On `s
 
 ### When deploying a new project
 - **Read the app's code first** to determine language, framework, port, and entry point. Don't write `infra.json` blindly.
-- **Ensure a Dockerfile exists** in the repo before you push a Container with `source.git`. For Next.js, set `output: "standalone"` in `next.config`.
+- **Pick the shape before the artifact.** See [Choosing compute](#choosing-compute); serverless is the default. A Container with `source.git` needs a Dockerfile in the repo (for Next.js, set `output: "standalone"` in `next.config`); a zip Function needs `commands` that produce `artifact`.
 - **Match the Container port to the Dockerfile `EXPOSE` line.** Mismatched ports cause health-check failures.
 - **For local-state apps (SQLite, file uploads), add a Volume** up front. ECS Fargate disk is ephemeral.
 - **Order components however you like**: references in the `connections` array are resolved by `name`, not by file order.
